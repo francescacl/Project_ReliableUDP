@@ -9,6 +9,33 @@ void error(const char *msg) {
 
 
 
+void check_args(int argc, char *argv[]) {
+  if (argc != 3) { /* controlla numero degli argomenti */
+    printf("Wrong number of arguments\n");
+    fprintf(stderr, "usage: server <packet loss probability> <timeout [ms]>\n");
+    exit(1);
+  }
+
+  loss_prob = atof(argv[1]);
+  if (loss_prob < 0 || loss_prob > 1) {
+    fprintf(stderr, "Loss probability must be within 0 and 1\n");
+    exit(1);
+  }
+  int temp = atoi(argv[2]);
+  if (temp < 0) {
+    fprintf(stderr, "Timeout cannot be less than 0\n");
+    exit(1);
+  } else {
+    // convert timeout to seconds and microseconds
+    timeout_s = temp / 1000;
+    timeout_us = (temp % 1000) * 1000;
+  }
+
+  return;
+}
+
+
+
 size_t file_size(char *filename) {
 /* Ritorna la grandezza del file in byte */
   FILE *file = fopen(filename, "rb");
@@ -166,6 +193,7 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
 
   // prepare packet to be sent
   packet->seq_num = seq_num_send;
+  packet->ack_num = seq_num_recv;
   memset(packet->data, 0, MAXLINE);
   
   if (is_file) {
@@ -191,6 +219,8 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
   return bytes_read;
 }
 
+
+
 void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
   udp_packet_t packet;
   int bytes_read = bytes_read_funct(&data, NULL, &packet);
@@ -198,20 +228,40 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
     error("Error in reading data");
   }
 
-  printf("[send_rel_single] Sending packet %d\n", packet.seq_num);
+  set_timeout(fd, timeout_s, timeout_us);
+
   while(1) {
+    printf("[send_rel_single] Sending packet %d\n", packet.seq_num);
     if (sendto(fd, &packet, sizeof(packet), 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
       error("Error in sendto");
 
     // wait for ack
-    // set_timeout(fd, 1, 0);
     udp_packet_t ack_packet;
-    if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+    while (1) {
+      memset(&ack_packet, 0, sizeof(ack_packet));
+      errno = 0;
+      printf("[send_rel_single] Waiting for ack %d\n", packet.seq_num);
+      if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          printf("[send_rel_single] Timeout...\n");
+          break;
+        }
+        error("Error in recvfrom");
+      }
+      printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
+
+      double random_number = (double)rand() / RAND_MAX;
+      if (random_number > loss_prob) {
+        printf("[send_rel_single] Packet %d lost\n", packet.seq_num);
         continue;
       }
-      error("Error in recvfrom");
+      break;
     }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      continue;
+    }
+    printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
+    printf("[send_rel_single] packet.seq_num = %d\n", packet.seq_num);
     if (ack_packet.ack_num == packet.seq_num) {
       printf("[send_rel_single] Ack %d received\n", ack_packet.ack_num);
       break;
@@ -220,8 +270,13 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
   seq_num_send += 1;
   printf("seq_num_send = %d\n", seq_num_send);
 
+  set_timeout(fd, 1000000, 0);
+    
+
   //free(packet.data);
 }
+
+
 
 void *send_rel_sender_thread(void *arg) {
   // parsa arg
@@ -229,7 +284,6 @@ void *send_rel_sender_thread(void *arg) {
   thread_data = (thread_data_t *) arg;
   int sockfd = thread_data->sockfd;
   struct sockaddr_in server_addr = thread_data->addr;
-  //uint32_t num_packets = thread_data->num_packets;
   FILE* file = thread_data->file;
   uint32_t *base = thread_data->base;
   pthread_mutex_t *lock = thread_data->lock;
@@ -272,8 +326,9 @@ void *send_rel_sender_thread(void *arg) {
   pthread_exit(NULL);
 }
 
+
+
 void *send_rel_receiver_thread(void *arg) {
-  //atomic_store(&end_thread, true);
   // parsa arg
   thread_data_t* thread_data;
   thread_data = (thread_data_t *) arg;
@@ -322,6 +377,8 @@ void *send_rel_receiver_thread(void *arg) {
   printf("End receiver thread\n");
   pthread_exit(NULL);
 }
+
+
 
 void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file) {
   
@@ -446,8 +503,6 @@ void* handle_user(void* arg) {
 		error("Error socket");
 	}
 
-
-
   // trova il nuovo numero di porta
 	int i = 0;
   uint32_t new_port;
@@ -471,6 +526,7 @@ void* handle_user(void* arg) {
 			break;
 		}
 	}
+  // set_timeout(new_socket, LONG_TIMEOUT, 0); TODO
 
   // stampa il nuovo numero di porta
   printf("[%lu] New port number: %u\n\n", tid, new_port);
@@ -578,8 +634,10 @@ void* handle_user(void* arg) {
 
 
 int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
+
+  check_args(argc, argv);
+
+  srand(time(NULL)); // inizializzazione seed numeri randomici
 
   tid = pthread_self();
   printf("[%lu] Main tid\n", tid);
@@ -593,7 +651,6 @@ int main(int argc, char **argv) {
     printf("Waiting for request...\n");
     fflush(stdout);
 
-    //set_timeout(sockfd, 5, 0);
     char buff[MAXLINE] = {0};
     buff[0] = '\0';
     int rec = recv_rel(sockfd, buff, MAXLINE, false, &addr, &len, &addr); 

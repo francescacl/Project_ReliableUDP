@@ -17,7 +17,6 @@
 #include <time.h>
 #include <sys/time.h>
 
-#define TIMEOUT 1 // Timeout in seconds
 //#define MAX_DATA_SIZE 1024
 #define WINDOW_SIZE 5 // Example window size
 
@@ -40,7 +39,7 @@ void error(const char *msg);
 size_t fileSize(char *filename);
 char* filePath(char *fpath, char *fname);
 int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length);
-void check_args(int argc);
+void check_args(int argc, char *argv[]);
 void create_conn(char *ip_address, uint16_t port);
 void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file);
 void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
@@ -52,6 +51,10 @@ void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num);
 void put_option();
 
 // Variabili
+char* server_ip;
+uint32_t timeout;
+double loss_prob;
+
 int sockfd, n;
 struct sockaddr_in servaddr;
 FILE *file;

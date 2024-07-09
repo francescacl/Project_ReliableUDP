@@ -75,12 +75,28 @@ void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num) {
 
 
 
-void check_args(int argc) {
-  if (argc != 2) { /* controlla numero degli argomenti */
-    printf("argc: %d\n",argc);
-    fprintf(stderr, "usage: daytime_clientUDP <server IP address>\n");
+void check_args(int argc, char *argv[]) {
+  if (argc != 4) { /* controlla numero degli argomenti */
+    printf("Wrong number of arguments\n");
+    fprintf(stderr, "usage: client <server IP address> <packet loss probability> <timeout [ms]>\n");
     exit(1);
   }
+
+  server_ip = argv[1];
+
+  loss_prob = atof(argv[2]);
+  if (loss_prob < 0 || loss_prob > 1) {
+    fprintf(stderr, "Loss probability must be within 0 and 1\n");
+    exit(1);
+  }
+  int temp = atoi(argv[3]);
+  if (temp < 0) {
+    fprintf(stderr, "Timeout cannot be less than 0\n");
+    exit(1);
+  } else {
+    timeout = (uint32_t) temp;
+  }
+
   return;
 }
 
@@ -135,6 +151,7 @@ int bytes_read_funct(char **data, char* buff, FILE* file, udp_packet_t* packet) 
 
   // prepare packet to be sent
   packet->seq_num = seq_num_send;
+  packet->ack_num = seq_num_recv-1;
   memset(packet->data, 0, MAXLINE);
   
   if (is_file) {
@@ -169,25 +186,28 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
   }
 
   printf("[send_rel_single] Sending packet %d\n", packet.seq_num);
-  while(1) {
+  //while(1) {
     if (sendto(fd, &packet, sizeof(packet), 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
       error("Error in sendto");
 
     // wait for ack
     // set_timeout(fd, 1, 0);
     udp_packet_t ack_packet;
-    if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        continue;
+    while (1) {
+      if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break;
+        }
+        error("Error in recvfrom");
       }
-      error("Error in recvfrom");
+      printf("[send_rel_single] Received ack %d\n", ack_packet.ack_num);
+      if (ack_packet.ack_num == packet.seq_num) {
+        break;
+      }
     }
-    printf("[send_rel_single] Received ack %d\n", ack_packet.ack_num);
-    if (ack_packet.ack_num == packet.seq_num) {
-      break;
-    }
-  }
+  //}
   seq_num_send += 1;
+  set_timeout(fd, 1000000, 0);
 }
 
 
@@ -512,11 +532,11 @@ void put_option() {
 
 int main(int argc, char *argv[]) {
 
-  check_args(argc);
+  check_args(argc, argv);
 
   ////////// New connection //////////
 
-  create_conn(argv[1], htons(SERV_PORT));
+  create_conn(server_ip, htons(SERV_PORT));
   printf("Connection with main established\n");
   fflush(stdout);
   //char *new = '\0'

@@ -20,7 +20,7 @@
 #include <math.h>
 #include <stdatomic.h>
 
-#define TIMEOUT 1 // Timeout in seconds
+#define LONG_TIMEOUT 60
 #define SERV_PORT	   5193
 #define WINDOW_SIZE  10
 #define MAXLINE		   2048
@@ -49,6 +49,7 @@ typedef struct {
 
 // Funzioni
 void error(const char *msg);
+void check_args(int argc, char *argv[]);
 size_t fileSize(char *filename);
 char* filePath(char *fpath, char *fname);
 int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr);
@@ -63,6 +64,9 @@ void send_ack(int sockfd, struct sockaddr_in *address, uint32_t ack_num);
 uint32_t num_packets(uint32_t size);
 
 // Variabili
+int timeout_s;
+int timeout_us;
+double loss_prob;
 int sockfd;
 socklen_t len;
 struct sockaddr_in addr;
