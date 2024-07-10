@@ -4,8 +4,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <sys/types.h>
+#include <sys/time.h>
 
 #include <errno.h>
 #include <math.h>
@@ -13,13 +13,13 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdio_ext.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
 
-#define LONG_TIMEOUT  60
+#define LONG_TIMEOUT  60 // TODO
 #define MAXLINE		    2048
 #define SERV_PORT	    5193
 #define WINDOW_SIZE   10
@@ -77,5 +77,9 @@ struct sockaddr_in addr;
 __thread uint32_t seq_num_send;
 __thread uint32_t seq_num_recv;
 __thread pthread_t tid;
+__thread uint32_t duplicated_ack;
+__thread uint32_t ssthresh;
+__thread uint32_t cwnd;
+__thread uint32_t fase; // 0 = slow start, 1 = congestion avoidance, 2 = fast recovery
 
 #endif // SERVER_H

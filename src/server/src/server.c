@@ -31,6 +31,10 @@ void check_args(int argc, char *argv[]) {
     timeout_us = (temp % 1000) * 1000;
   }
 
+  char loss_perc[10];
+  snprintf(loss_perc, sizeof(loss_perc), "%.0f%%", loss_prob * 100);
+  printf("Chosen arguments:\n  - Loss probability: %s\n  - Timeout: %d [ms]\n\n\n", loss_perc, temp);
+
   return;
 }
 
@@ -125,6 +129,55 @@ void send_ack(int sockfd, struct sockaddr_in *address, uint32_t ack_num) {
   if (sendto(sockfd, &ack_packet, sizeof(ack_packet), 0, (struct sockaddr *)address, (socklen_t) sizeof(*address)) < 0) {
     error("Error in send_ack");
   }
+}
+
+
+
+void ls(char *list_command){
+
+  sprintf(list_command, "ls %s", FILENAME_PATH);
+     
+  FILE *pipe = popen(list_command, "r");
+  if (pipe == NULL) {
+    error("Error in opening the pipe");
+  }
+  // Leggi l'output del comando e salvalo in una stringa
+  size_t bytes_read = fread(list_command, 1, MAXLINE, pipe);
+  if (bytes_read == 0) {
+    error("Error in reading the output of the command");
+  }
+  list_command[bytes_read] = '\0';
+
+  // Chiudi la pipe
+  if (pclose(pipe) == -1) {
+    error("Error in closing the pipe");
+  }
+
+}
+
+
+
+void create_conn() {
+
+  len = sizeof(struct sockaddr_in);
+
+  if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { /* crea la socket */
+    error("Error in socket");
+  }
+  printf("Socket created\n");
+  fflush(stdout);
+
+  memset((void *)&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY); /* il server accetta pacchetti su una qualunque delle sue interfacce di rete */
+  addr.sin_port = htons(SERV_PORT); /* numero di porta del server */
+
+  /* assegna l'indirizzo al socket */
+  if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    error("Error in bind");
+  }
+  printf("Socket binded\n");
+  fflush(stdout);
 }
 
 
@@ -489,55 +542,6 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
 
 
 
-void create_conn() {
-
-  len = sizeof(struct sockaddr_in);
-
-  if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { /* crea la socket */
-    error("Error in socket");
-  }
-  printf("Socket created\n");
-  fflush(stdout);
-
-  memset((void *)&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY); /* il server accetta pacchetti su una qualunque delle sue interfacce di rete */
-  addr.sin_port = htons(SERV_PORT); /* numero di porta del server */
-
-  /* assegna l'indirizzo al socket */
-  if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    error("Error in bind");
-  }
-  printf("Socket binded\n");
-  fflush(stdout);
-}
-
-
-
-void ls(char *list_command){
-
-  sprintf(list_command, "ls %s", FILENAME_PATH);
-     
-  FILE *pipe = popen(list_command, "r");
-  if (pipe == NULL) {
-    error("Error in opening the pipe");
-  }
-  // Leggi l'output del comando e salvalo in una stringa
-  size_t bytes_read = fread(list_command, 1, MAXLINE, pipe);
-  if (bytes_read == 0) {
-    error("Error in reading the output of the command");
-  }
-  list_command[bytes_read] = '\0';
-
-  // Chiudi la pipe
-  if (pclose(pipe) == -1) {
-    error("Error in closing the pipe");
-  }
-
-}
-
-
-
 void* handle_user(void* arg) {
 
   // parsa arg
@@ -550,6 +554,9 @@ void* handle_user(void* arg) {
   FILE *file;
   seq_num_send = 0;
   seq_num_recv = 1;
+  duplicated_ack = 0;
+  ssthresh = 64;
+  cwnd = 1;
 
   // ottiene il thread id
   tid = pthread_self();

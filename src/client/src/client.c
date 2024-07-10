@@ -9,6 +9,39 @@ void error(const char *msg) {
 
 
 
+void check_args(int argc, char *argv[]) {
+  if (argc != 4) { /* controlla numero degli argomenti */
+    printf("Wrong number of arguments\n");
+    fprintf(stderr, "usage: client <server IP address> <packet loss probability> <timeout [ms]>\n");
+    exit(1);
+  }
+
+  server_ip = argv[1];
+
+  loss_prob = atof(argv[2]);
+  if (loss_prob < 0 || loss_prob > 1) {
+    fprintf(stderr, "Loss probability must be within 0 and 1\n");
+    exit(1);
+  }
+  int temp = atoi(argv[3]);
+  if (temp < 0) {
+    fprintf(stderr, "Timeout cannot be less than 0\n");
+    exit(1);
+  } else {
+    // convert timeout to seconds and microseconds
+    timeout_s = temp / 1000;
+    timeout_us = (temp % 1000) * 1000;
+  }
+
+  char loss_perc[10];
+  snprintf(loss_perc, sizeof(loss_perc), "%.0f%%", loss_prob * 100);
+  printf("Chosen arguments:\n  - Server ip: %s\n  - Loss probability: %s\n  - Timeout: %d [ms]\n\n\n", server_ip, loss_perc, temp);
+
+  return;
+}
+
+
+
 size_t file_size(char *filename) {
 /* Ritorna la grandezza del file in byte */
   FILE *file = fopen(filename, "rb");
@@ -81,6 +114,12 @@ void set_timeout(int sock, int timeout_s, int timeout_us) {
 
 
 
+uint32_t num_packets(uint32_t size) {
+  return (uint32_t)ceil((double)size / (double)MAXLINE);
+}
+
+
+
 void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num) {
   udp_packet_t ack_packet;
   ack_packet.seq_num = 0;
@@ -91,35 +130,6 @@ void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num) {
     error("Error in send_ack");
   }
   printf("[send_ack] Ack sent with ack_num %d\n", ack_num);
-}
-
-
-
-void check_args(int argc, char *argv[]) {
-  if (argc != 4) { /* controlla numero degli argomenti */
-    printf("Wrong number of arguments\n");
-    fprintf(stderr, "usage: client <server IP address> <packet loss probability> <timeout [ms]>\n");
-    exit(1);
-  }
-
-  server_ip = argv[1];
-
-  loss_prob = atof(argv[2]);
-  if (loss_prob < 0 || loss_prob > 1) {
-    fprintf(stderr, "Loss probability must be within 0 and 1\n");
-    exit(1);
-  }
-  int temp = atoi(argv[3]);
-  if (temp < 0) {
-    fprintf(stderr, "Timeout cannot be less than 0\n");
-    exit(1);
-  } else {
-    // convert timeout to seconds and microseconds
-    timeout_s = temp / 1000;
-    timeout_us = (temp % 1000) * 1000;
-  }
-
-  return;
 }
 
 
@@ -163,6 +173,100 @@ void create_conn(char *ip_address, uint16_t port) {
   }
 
   return;
+}
+
+
+
+int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length) { 
+  udp_packet_t packet;
+  int totalReceived = 0;
+  if (sockfd > 0) {
+    int received = 0;
+    while(size > 0) {
+      errno = 0;
+      if ((received = recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length)) < 0) {
+        if (errno == EINTR || errno == EAGAIN) {
+          send_ack(sockfd, &servaddr, seq_num_recv-1);
+          continue;
+        }
+        fprintf(stderr, "Error udp wait_recv: %d\n", errno);
+        return -1;
+      }
+
+      double random_number = (double)rand() / RAND_MAX;
+      if (random_number < loss_prob) {
+        printf("[wait_recv] Packet %d lost\n", packet.seq_num);
+        continue;
+      }
+
+      printf("[wait_recv] Received packet with seq_num: %d\n", packet.seq_num);
+      printf("[wait_recv] Current seq_num_recv: %d\n", seq_num_recv);
+      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
+        send_ack(sockfd, &servaddr, seq_num_recv);
+        seq_num_recv += 1;
+      } else {
+        send_ack(sockfd, &servaddr, seq_num_recv-1);
+        continue;
+      }
+
+      memcpy(buff + totalReceived, packet.data, packet.data_size);
+      totalReceived += packet.data_size;
+      size -= packet.data_size;
+    }
+
+    return totalReceived;
+  }
+  return -1;
+}
+
+
+
+int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length) {
+  int k;
+  if(!size_rcv) {
+    udp_packet_t packet;
+    set_timeout(sock, timeout_s, timeout_us);
+    while(1) {
+      errno = 0;
+      if (recvfrom(sock, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length) < 0) {
+        if (errno == EINTR || errno == EAGAIN /* timeout */) {
+          printf("[recv_rel] errno: %d\n", errno);
+          fflush(stdout);
+          continue;
+        }
+        error("Error in recvfrom");
+        return -2;
+      }
+
+      double random_number = (double)rand() / RAND_MAX;
+      if (random_number < loss_prob) {
+        printf("[recv_rel] Packet %d lost\n", packet.seq_num);
+        continue;
+      }
+
+      k = packet.data_size;
+      memcpy(buffer, packet.data, k);
+
+      if (address == NULL) {
+        servaddr.sin_port = htons(strtoul(buffer, NULL, 10));
+        printf("New port: %d\n", htonl(servaddr.sin_port));
+      }
+      printf("[recv_rel] Received packet with seq_num: %d\n", packet.seq_num);
+      printf("[recv_rel] Current seq_num_recv: %d\n", seq_num_recv);
+      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
+        printf("[recv_rel] Correct package, seq_num_recv++: %d\n", seq_num_recv+1);
+        send_ack(sock, &servaddr, seq_num_recv);
+        seq_num_recv += 1;
+        break;
+      } else {
+        send_ack(sock, &servaddr, seq_num_recv-1);
+      }
+    }
+  } else {
+    k = wait_recv(buffer, dim, sock, address, addr_length);
+  }
+  set_timeout(sock, 1000000, 0);
+  return k;
 }
 
 
@@ -222,6 +326,7 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
       printf("[send_rel_single] Waiting for ack %d\n", packet.seq_num);
       if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          printf("[send_rel_single] errno: %d\n", errno);
           printf("[send_rel_single] Timeout...\n");
           break;
         }
@@ -230,6 +335,7 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
       printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
 
       double random_number = (double)rand() / RAND_MAX;
+      printf("[send_rel_single] random_number: %f\n", random_number);
       if (random_number < loss_prob) {
         printf("[send_rel_single] Ack packet %d lost\n", ack_packet.ack_num);
         continue;
@@ -248,12 +354,6 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
   }
   seq_num_send += 1;
   set_timeout(fd, 1000000, 0);
-}
-
-
-
-uint32_t num_packets(uint32_t size) {
-  return (uint32_t)ceil((double)size / (double)MAXLINE);
 }
 
 
@@ -438,98 +538,6 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
 }
 
 
-
-int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length) { 
-  udp_packet_t packet;
-  int totalReceived = 0;
-  if (sockfd > 0) {
-    int received = 0;
-    while(size > 0) {
-      errno = 0;
-      if ((received = recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length)) < 0) {
-        if (errno == EINTR || errno == EAGAIN) {
-          send_ack(sockfd, &servaddr, seq_num_recv-1);
-          continue;
-        }
-        fprintf(stderr, "Error udp wait_recv: %d\n", errno);
-        return -1;
-      }
-
-      double random_number = (double)rand() / RAND_MAX;
-      if (random_number < loss_prob) {
-        printf("[wait_recv] Packet %d lost\n", packet.seq_num);
-        continue;
-      }
-
-      printf("[wait_recv] Received packet with seq_num: %d\n", packet.seq_num);
-      printf("[wait_recv] Current seq_num_recv: %d\n", seq_num_recv);
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
-        send_ack(sockfd, &servaddr, seq_num_recv);
-        seq_num_recv += 1;
-      } else {
-        send_ack(sockfd, &servaddr, seq_num_recv-1);
-        continue;
-      }
-
-      memcpy(buff + totalReceived, packet.data, packet.data_size);
-      totalReceived += packet.data_size;
-      size -= packet.data_size;
-    }
-
-    return totalReceived;
-  }
-  return -1;
-}
-
-
-
-int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length) {
-  int k;
-  if(!size_rcv) {
-    udp_packet_t packet;
-    set_timeout(sock, timeout_s, timeout_us);
-    while(1) {
-      errno = 0;
-      if (recvfrom(sock, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length) < 0) {
-        if (errno == EINTR || errno == EAGAIN /* timeout */) {
-          printf("[recv_rel] errno: %d\n", errno);
-          fflush(stdout);
-          continue;
-        }
-        error("Error in recvfrom");
-        return -2;
-      }
-
-      double random_number = (double)rand() / RAND_MAX;
-      if (random_number < loss_prob) {
-        printf("[send_rel_single] Packet %d lost\n", packet.seq_num);
-        continue;
-      }
-
-      k = packet.data_size;
-      memcpy(buffer, packet.data, k);
-
-      if (address == NULL) {
-        servaddr.sin_port = htons(strtoul(buffer, NULL, 10));
-        printf("New port: %d\n", htonl(servaddr.sin_port));
-      }
-      printf("[recv_rel] Received packet with seq_num: %d\n", packet.seq_num);
-      printf("[recv_rel] Current seq_num_recv: %d\n", seq_num_recv);
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
-        printf("[recv_rel] Correct package, seq_num_recv++: %d\n", seq_num_recv+1);
-        send_ack(sock, &servaddr, seq_num_recv);
-        seq_num_recv += 1;
-        break;
-      } else {
-        send_ack(sock, &servaddr, seq_num_recv-1);
-      }
-    }
-  } else {
-    k = wait_recv(buffer, dim, sock, address, addr_length);
-  }
-  set_timeout(sock, 1000000, 0);
-  return k;
-}
 
 int wait_for_input(int count, char* buff_in) {
   int buff_in_int;
@@ -757,6 +765,8 @@ void put_option() {
 int main(int argc, char *argv[]) {
 
   check_args(argc, argv);
+
+  srand(time(NULL)); // inizializzazione seed numeri randomici
 
   ////////// New connection //////////
 

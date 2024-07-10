@@ -3,7 +3,6 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -17,16 +16,15 @@
 #include <stdio_ext.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 
 
-#define BACKLOG		  10
-#define MAXLINE		  2048
-#define MAXVECT     512
-#define WINDOW_SIZE 5
-#define SERV_PORT	  5193
-#define DEST_PATH   "files/client/"
+#define LONG_TIMEOUT  60 // TODO
+#define MAXLINE		    2048
+#define MAXVECT       512
+#define WINDOW_SIZE   5
+#define SERV_PORT	    5193
+#define DEST_PATH     "files/client/"
 
 typedef struct {
   uint32_t seq_num;   // Sequence number of the packet
