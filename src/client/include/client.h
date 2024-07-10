@@ -63,7 +63,7 @@ void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num);
 void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file);
 void *send_rel_receiver_thread(void *arg);
 void *send_rel_sender_thread(void *arg);
-void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
+void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last);
 void set_timeout(int sock, int timeout_s, int timeout_us);
 int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length);
 int wait_for_input(int count, char* buff_in);

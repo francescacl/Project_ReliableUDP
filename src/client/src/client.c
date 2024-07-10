@@ -304,8 +304,9 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
 
 
 
-void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
+void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last) {
   udp_packet_t packet;
+  uint32_t counter = 0;
   int bytes_read = bytes_read_funct(&data, NULL, &packet);
   if (bytes_read < 0) {
     error("Error in reading data");
@@ -326,7 +327,8 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
       printf("[send_rel_single] Waiting for ack %d\n", packet.seq_num);
       if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          printf("[send_rel_single] errno: %d\n", errno);
+          counter++;
+          if (last && counter == 10) return;
           printf("[send_rel_single] Timeout...\n");
           break;
         }
@@ -494,7 +496,7 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
   char size_str[11];
   size_str[0] = '\0';
   snprintf(size_str, sizeof(size_str), "%u", size);
-  send_rel_single(fd, send_addr, size_str);
+  send_rel_single(fd, send_addr, size_str, false);
 
   pthread_mutex_t lock;
   pthread_cond_t cond;
@@ -658,7 +660,7 @@ void get_option(socklen_t servaddr_len) {
   list_option(servaddr_len, 1, &name); // 1: get option
 
   // Manda il nome del file desiderato al server
-  send_rel_single(sockfd, servaddr, name);
+  send_rel_single(sockfd, servaddr, name, false);
   // Ricezione della grandezza del file dal server
   char size_rcv_str[11] = {0};
   
@@ -742,7 +744,7 @@ void put_option() {
   }
   strncpy(file_to_send, list_command + index, i);
   file_to_send[i] = '\0';
-  send_rel_single(sockfd, servaddr, file_to_send);
+  send_rel_single(sockfd, servaddr, file_to_send, false);
 
   // invio dell'immagine al server
   printf("Sending file\n");
@@ -776,7 +778,7 @@ int main(int argc, char *argv[]) {
   //char *new = '\0'
   char *new = "new\0";
   printf("Sending request\n");
-  send_rel_single(sockfd, servaddr, new);
+  send_rel_single(sockfd, servaddr, new, false);
   printf("Request sent\n\n");
   fflush(stdout);
 
@@ -813,8 +815,7 @@ int main(int argc, char *argv[]) {
     char buff_in;
     int buff_in_int = wait_for_input(4, &buff_in);
 
-    // manda la scelta del client al server
-    send_rel_single(sockfd, servaddr, &buff_in);
+    send_rel_single(sockfd, servaddr, &buff_in, buff_in_int == 3 ? true : false);
 
     ////////// Manage choice ///////////
 
