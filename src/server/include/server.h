@@ -1,29 +1,28 @@
 #ifndef SERVER_H
 #define SERVER_H
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <errno.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/types.h>
 
+#include <errno.h>
+#include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-
-#include <pthread.h>
-
 #include <time.h>
-#include <sys/time.h>
-#include <stdbool.h>
-#include <math.h>
-#include <stdatomic.h>
+#include <unistd.h>
 
-#define LONG_TIMEOUT 60
-#define SERV_PORT	   5193
-#define WINDOW_SIZE  10
-#define MAXLINE		   2048
+
+#define LONG_TIMEOUT  60
+#define MAXLINE		    2048
+#define SERV_PORT	    5193
+#define WINDOW_SIZE   10
 #define FILENAME_PATH "files/server/"
 
 typedef struct {
@@ -45,23 +44,26 @@ typedef struct {
   pthread_cond_t *cond;
   atomic_bool *end_thread;
   bool *acked;
+  time_t *timer_start;
 } thread_data_t;
 
 // Funzioni
-void error(const char *msg);
-void check_args(int argc, char *argv[]);
-size_t fileSize(char *filename);
-char* filePath(char *fpath, char *fname);
-int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr);
-void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file);
-void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
-void create_conn();
 int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet);
-int wait_recv(char *buff, long size, int , struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr);
 uint32_t calculate_checksum(udp_packet_t *packet);
-void set_timeout(int sock, int timeout_s, int timeout_us);
-void send_ack(int sockfd, struct sockaddr_in *address, uint32_t ack_num);
+void check_args(int argc, char *argv[]);
+void create_conn();
+void error(const char *msg);
+char* file_path(char *fpath, char *fname);
+size_t file_size(char *filename);
 uint32_t num_packets(uint32_t size);
+int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr);
+void send_ack(int sockfd, struct sockaddr_in *address, uint32_t ack_num);
+void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file);
+void *send_rel_receiver_thread(void *arg);
+void *send_rel_sender_thread(void *arg);
+void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
+void set_timeout(int sock, int timeout_s, int timeout_us);
+int wait_recv(char *buff, long size, int , struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr);
 
 // Variabili
 int timeout_s;

@@ -1,4 +1,4 @@
-CC=gcc
+CC=/usr/bin/gcc
 CFLAGS= -std=gnu17 -Wall -Wextra -O2 -I./src/server/include -I./src/client/include
 
 all: server client

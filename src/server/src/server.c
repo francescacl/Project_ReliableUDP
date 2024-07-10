@@ -118,10 +118,17 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
       errno = 0;
       if ((received = recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length)) < 0) {
         if (errno == EINTR || errno == EAGAIN) {
+          send_ack(sockfd, client_addr, seq_num_recv-1);
           continue;
         }
         fprintf(stderr, "Error udp wait_recv: %d\n", errno);
         return -1;
+      }
+
+      double random_number = (double)rand() / RAND_MAX;
+      if (random_number < loss_prob) {
+        printf("[wait_recv] Packet %d lost\n", packet.seq_num);
+        continue;
       }
       
       if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
@@ -160,6 +167,12 @@ int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_
         return -2;
       }
 
+      double random_number = (double)rand() / RAND_MAX;
+      if (random_number < loss_prob) {
+        printf("[recv_rel] Packet %d lost\n", packet.seq_num);
+        continue;
+      }
+
       printf("packet.seq_num = %d\n", packet.seq_num);
       printf("seq_num_recv = %d\n", seq_num_recv);
       fflush(stdout); 
@@ -174,7 +187,6 @@ int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_
     }
 
     k = packet.data_size;
-    // stampa packet.data
     printf("packet.data: %s\n", packet.data);
     fflush(stdout);
     memcpy(buffer, packet.data, k);
@@ -193,7 +205,7 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
 
   // prepare packet to be sent
   packet->seq_num = seq_num_send;
-  packet->ack_num = seq_num_recv;
+  packet->ack_num = seq_num_recv-1;
   memset(packet->data, 0, MAXLINE);
   
   if (is_file) {
@@ -251,8 +263,8 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
       printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
 
       double random_number = (double)rand() / RAND_MAX;
-      if (random_number > loss_prob) {
-        printf("[send_rel_single] Packet %d lost\n", packet.seq_num);
+      if (random_number < loss_prob) {
+        printf("[send_rel_single] Ack packet %d lost\n", ack_packet.ack_num);
         continue;
       }
       break;
@@ -272,7 +284,6 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
 
   set_timeout(fd, 1000000, 0);
     
-
   //free(packet.data);
 }
 
@@ -289,36 +300,48 @@ void *send_rel_sender_thread(void *arg) {
   pthread_mutex_t *lock = thread_data->lock;
   pthread_cond_t *cond = thread_data->cond;
   atomic_bool *end_thread = thread_data->end_thread;
+  time_t *timer_start = thread_data->timer_start;
+  const uint32_t num_packets = thread_data->num_packets;
 
   uint32_t next_seq_num = *base;
+  uint32_t next_seq_num_start = next_seq_num;
 
-  udp_packet_t packets[WINDOW_SIZE];
+  udp_packet_t packets[num_packets];
   memset(packets, 0, sizeof(packets));
+  for (uint32_t i = 0; i < num_packets; i++) {
+    bytes_read_funct(NULL, file, &packets[i]);
+  }
 
-  //bool end_thread = false;
   while (!atomic_load(end_thread)) {
     pthread_mutex_lock(lock);
 
     while (next_seq_num < (*base) + WINDOW_SIZE) {
-      udp_packet_t packet;
-      int bytes_read = bytes_read_funct(NULL, file, &packet);
-      packet.seq_num = next_seq_num;
-      packet.checksum = calculate_checksum(&packet);
-      if (bytes_read == 0) {
-        //end_thread = true;
+      if (next_seq_num == num_packets + next_seq_num_start) {
         break;
       }
+
+      udp_packet_t packet = packets[next_seq_num - next_seq_num_start];
+      packet.seq_num = next_seq_num;
+      packet.checksum = calculate_checksum(&packet);
       
-      packets[next_seq_num % WINDOW_SIZE] = packet;
       thread_data->acked[next_seq_num % WINDOW_SIZE] = 0;
 
       sendto(sockfd, &packet, sizeof(packet), 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
       printf("Sent packet with seq_num %d\n", packet.seq_num);
 
+      if (next_seq_num == *base) {
+        printf("Setting timeout\n");
+        *timer_start = time(NULL);
+      }
       next_seq_num++;
     }
 
     pthread_cond_wait(cond, lock);
+    if (difftime(time(NULL), *timer_start) > ((double) timeout_s + (double) timeout_us / 1000000)) {
+      printf("\t\tTimeout\n");
+      memset(thread_data->acked, 0, WINDOW_SIZE * sizeof(bool));
+      next_seq_num = *base;
+    }
     pthread_mutex_unlock(lock);
   }
 
@@ -338,39 +361,54 @@ void *send_rel_receiver_thread(void *arg) {
   pthread_mutex_t *lock = thread_data->lock;
   pthread_cond_t *cond = thread_data->cond;
   atomic_bool *end_thread = thread_data->end_thread;
+  time_t *timer_start = thread_data->timer_start;
 
   uint32_t seq_num_start = *base;
+
+  set_timeout(sockfd, timeout_s, timeout_us);
 
   while (!atomic_load(end_thread)) {
     udp_packet_t ack_packet;
     if (recvfrom(sockfd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        pthread_cond_signal(cond);
         continue;
       }
       error("Error in recvfrom");
     }
+
+    double random_number = (double)rand() / RAND_MAX;
+    if (random_number < loss_prob) {
+      printf("[send_rel_receiver_thread] Ack packet %d lost\n", ack_packet.ack_num);
+      continue;
+    }
+
     uint32_t ack_num = ack_packet.ack_num;
-    printf("Received ack for packet with seq_num %d\n", ack_num);
+    printf("[send_rel_receiver_thread] Received ack for packet with seq_num %d\n", ack_num);
 
     if (ack_num == num_packets + seq_num_start - 1) {
       atomic_store(end_thread, true);
       break;
     }
-
     pthread_mutex_lock(lock);
 
     if (ack_num >= (*base)) {
-      thread_data->acked[ack_num % WINDOW_SIZE] = 1;
+      for (uint32_t i = *base; i < ack_num; i++) {
+        thread_data->acked[i % WINDOW_SIZE] = 1;
+      }
+
+      *timer_start = time(NULL);
 
       while (thread_data->acked[(*base) % WINDOW_SIZE]) {
         (*base)++;
       }
-
       pthread_cond_signal(cond);
     }
 
     pthread_mutex_unlock(lock);
   }
+
+  set_timeout(sockfd, 1000000, 0);
 
   pthread_cond_signal(cond);
 
@@ -392,6 +430,7 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
   pthread_cond_t cond;
   pthread_mutex_init(&lock, NULL);
   pthread_cond_init(&cond, NULL);
+  time_t timer_start;
 
   atomic_bool end_thread;
   end_thread = ATOMIC_VAR_INIT(false);
@@ -411,6 +450,7 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
   thread_data.cond = &cond;
   thread_data.end_thread = &end_thread;
   thread_data.acked = malloc(WINDOW_SIZE * sizeof(bool));
+  thread_data.timer_start = &timer_start;
 
   pthread_t sender, receiver;
   pthread_create(&sender, NULL, send_rel_sender_thread, &thread_data);

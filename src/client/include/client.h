@@ -1,30 +1,32 @@
 #ifndef CLIENT_H
 #define CLIENT_H
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <arpa/inet.h>
-#include <errno.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/time.h>
 
+#include <errno.h>
+#include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-#include <stdbool.h>
-
 #include <time.h>
-#include <sys/time.h>
+#include <unistd.h>
 
-//#define MAX_DATA_SIZE 1024
-#define WINDOW_SIZE 5 // Example window size
 
-#define SERV_PORT	5193
-#define BACKLOG		10
-#define MAXLINE		2048
+#define BACKLOG		  10
+#define MAXLINE		  2048
+#define MAXVECT     512
+#define WINDOW_SIZE 5
+#define SERV_PORT	  5193
 #define DEST_PATH   "files/client/"
-#define MAXVECT 512
 
 typedef struct {
   uint32_t seq_num;   // Sequence number of the packet
@@ -34,25 +36,44 @@ typedef struct {
   uint32_t checksum;  // Checksum of the packet
 } udp_packet_t;
 
+typedef struct {
+  int sockfd;
+  struct sockaddr_in addr;
+  uint32_t num_packets;
+  FILE* file;
+  uint32_t seq_num_start;
+  uint32_t *base;
+  pthread_mutex_t *lock;
+  pthread_cond_t *cond;
+  atomic_bool *end_thread;
+  bool *acked;
+  time_t *timer_start;
+} thread_data_t;
+
 // Funzioni
-void error(const char *msg);
-size_t fileSize(char *filename);
-char* filePath(char *fpath, char *fname);
-int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length);
+int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet);
+uint32_t calculate_checksum(udp_packet_t *packet);
 void check_args(int argc, char *argv[]);
 void create_conn(char *ip_address, uint16_t port);
-void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file);
-void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
-int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length); 
-int bytes_read_funct(char **data, char* buff, FILE* file, udp_packet_t* packet);
-uint32_t calculate_checksum(udp_packet_t *packet);
-void set_timeout(int sock, int timeout_s, int timeout_us);
-void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num);
+void error(const char *msg);
+char* file_path(char *fpath, char *fname);
+size_t file_size(char *filename);
+uint32_t num_packets(uint32_t size);
 void put_option();
+int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length); 
+void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num);
+void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file);
+void *send_rel_receiver_thread(void *arg);
+void *send_rel_sender_thread(void *arg);
+void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
+void set_timeout(int sock, int timeout_s, int timeout_us);
+int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length);
+int wait_for_input(int count, char* buff_in);
 
 // Variabili
 char* server_ip;
-uint32_t timeout;
+int timeout_s;
+int timeout_us;
 double loss_prob;
 
 int sockfd, n;
