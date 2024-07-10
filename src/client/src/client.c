@@ -27,13 +27,33 @@ size_t file_size(char *filename) {
 
 
 uint32_t calculate_checksum(udp_packet_t *packet) {
-  uint32_t checksum = 0;
-  checksum ^= packet->seq_num;
-  checksum ^= packet->ack_num;
-  for (int i = 0; i < packet->data_size; i++) {
-    checksum ^= packet->data[i];
-  }
-  return checksum;
+    uint32_t checksum = 0;
+    uint32_t sum = 0;
+    
+    // Somma seq_num e ack_num come sequenze di 16 bit
+    sum += (packet->seq_num >> 16) & 0xFFFF;
+    sum += packet->seq_num & 0xFFFF;
+    sum += (packet->ack_num >> 16) & 0xFFFF;
+    sum += packet->ack_num & 0xFFFF;
+
+    // Somma i dati come sequenze di 16 bit
+    for (int i = 0; i < packet->data_size; i += 2) {
+        uint16_t word = packet->data[i];
+        if (i + 1 < packet->data_size) {
+            word |= (packet->data[i + 1] << 8);
+        }
+        sum += word;
+    }
+
+    // Aggiungi eventuali riporti alla fine della somma
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    // Inverti i bit del risultato finale
+    checksum = ~sum;
+
+    return checksum;
 }
 
 
