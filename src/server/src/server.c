@@ -183,13 +183,13 @@ void create_conn() {
 
 
 int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr) { 
-  udp_packet_t packet;
   int totalReceived = 0;
   if (sockfd > 0) {
     int received = 0;
     while(size > 0) {
+      uint8_t buffer[MAX_SIZE_STRUCT];
       errno = 0;
-      if ((received = recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length)) < 0) {
+      if ((received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)address, addr_length)) < 0) {
         if (errno == EINTR || errno == EAGAIN) {
           send_ack(sockfd, client_addr, seq_num_recv-1);
           continue;
@@ -198,13 +198,24 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
         return -1;
       }
 
+      udp_packet_t *temp_packet = (udp_packet_t*) buffer;
+      udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
+
+      if (packet == NULL) {
+        error("malloc");
+      }
+
+      // Copia i dati nel nuovo buffer allocato
+      memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
+
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
-        printf("[wait_recv] Packet %d lost\n", packet.seq_num);
+        printf("[wait_recv] Packet %d lost\n", packet->seq_num);
         continue;
       }
       
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
+      printf("[wait_recv] Received packet with seq_num: %d\n", packet->seq_num);
+      if (packet->checksum == calculate_checksum(packet) && packet->seq_num == seq_num_recv) {
         send_ack(sockfd, client_addr, seq_num_recv);
         seq_num_recv += 1;
       } else {
@@ -212,9 +223,11 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
         continue;
       }
 
-      memcpy(buff + totalReceived, packet.data, packet.data_size);
-      totalReceived += packet.data_size;
-      size -= packet.data_size;
+      memcpy(buff + totalReceived, packet->data, packet->data_size);
+      totalReceived += packet->data_size;
+      size -= packet->data_size;
+
+      free(packet);
     }
 
     return totalReceived;
@@ -224,79 +237,92 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
 
 
 
-int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr) {
+int recv_rel(int sock, char *buff, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr) {
   int k;
   if(!size_rcv) {
-    udp_packet_t packet;
+    char buffer[MAX_SIZE_STRUCT] = {0};
+    set_timeout(sock, timeout_s, timeout_us); // aggiunto
     while(1) {
       errno = 0;
-      if (recvfrom(sock, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length) < 0) {
+      int j = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)address, addr_length);
+      if (j < 0) {
         if (errno == EINTR || errno == EAGAIN /* timeout */) {
-          printf("errno: %d\n", errno);
-          fflush(stdout);
           continue;
         }
         error("Error in recvfrom");
         return -2;
       }
+            
+      udp_packet_t *temp_packet = (udp_packet_t*) buffer;
+      udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
+
+      if (packet == NULL) {
+        error("malloc");
+      }
+
+      // Copia i dati nel nuovo buffer allocato
+      memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
 
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
-        printf("[recv_rel] Packet %d lost\n", packet.seq_num);
+        printf("[recv_rel] Packet %d lost\n", packet->seq_num);
         continue;
       }
 
-      printf("packet.seq_num = %d\n", packet.seq_num);
-      printf("seq_num_recv = %d\n", seq_num_recv);
-      fflush(stdout); 
-      
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
+      k = packet->data_size;
+      memcpy(buff, packet->data, k);
+
+      printf("[recv_rel] Received packet with seq_num: %d\n", packet->seq_num);
+      if (packet->checksum == calculate_checksum(packet) && packet->seq_num == seq_num_recv) {
         send_ack(sock, client_addr, seq_num_recv);
         seq_num_recv += 1;
         break;
       } else {
         send_ack(sock, client_addr, seq_num_recv-1);
       }
-    }
 
-    k = packet.data_size;
-    printf("packet.data: %s\n", packet.data);
-    fflush(stdout);
-    memcpy(buffer, packet.data, k);
+      free(packet);
+    }
   } else {
-    k = wait_recv(buffer, dim, sock, address, addr_length, client_addr);
+    k = wait_recv(buff, dim, sock, address, addr_length, client_addr);
   }
+  set_timeout(sock, 1000000, 0);
   return k;
 }
 
 
 
-int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
-  int bytes_read;
-  bool is_file = file != NULL;
+int bytes_read_funct(char **data, FILE* file, udp_packet_t** packet) {
   char buff[MAXLINE] = {0};
-
-  // prepare packet to be sent
-  packet->seq_num = seq_num_send;
-  packet->ack_num = seq_num_recv-1;
-  memset(packet->data, 0, MAXLINE);
+  uint32_t bytes_read;
+  bool is_file = file != NULL;
   
   if (is_file) {
     bytes_read = fread(buff, 1, MAXLINE, file);
-    //packet->data = (char*)malloc(bytes_read * sizeof(char));
-    memcpy(packet->data, buff, bytes_read);
   } else {
     bytes_read = strlen(*data);
     if (bytes_read > MAXLINE) {
       bytes_read = MAXLINE;
     }
-    //packet->data = (char*)malloc(bytes_read * sizeof(char));
-    memcpy(packet->data, *data, bytes_read);
   }
 
-  packet->data_size = bytes_read;
-  packet->checksum = calculate_checksum(packet);
-  
+  // prepare packet to be sent
+  *packet = malloc(offsetof(struct temp, data) + bytes_read);
+  if (*packet == NULL) {
+    error("malloc");
+  }
+
+  (*packet)->seq_num = seq_num_send;
+  (*packet)->ack_num = seq_num_recv-1;
+  (*packet)->data_size = bytes_read;
+  for (uint32_t i = 0; i < bytes_read; i++) {
+    if (is_file) {
+      (*packet)->data[i] = buff[i];
+    } else {
+      (*packet)->data[i] = (*data)[i];
+    }
+  }
+  (*packet)->checksum = calculate_checksum(*packet);
   if (!is_file) {
     *data += bytes_read;
   }
@@ -306,8 +332,9 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
 
 
 
+
 void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
-  udp_packet_t packet;
+  udp_packet_t* packet;
   int bytes_read = bytes_read_funct(&data, NULL, &packet);
   if (bytes_read < 0) {
     error("Error in reading data");
@@ -316,16 +343,15 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
   set_timeout(fd, timeout_s, timeout_us);
 
   while(1) {
-    printf("[send_rel_single] Sending packet %d\n", packet.seq_num);
-    if (sendto(fd, &packet, sizeof(packet), 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
+    printf("[send_rel_single] Sending packet %d\n", packet->seq_num);
+    if (sendto(fd, packet, offsetof(struct temp, data) + packet->data_size, 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
       error("Error in sendto");
 
     // wait for ack
     udp_packet_t ack_packet;
     while (1) {
-      memset(&ack_packet, 0, sizeof(ack_packet));
       errno = 0;
-      printf("[send_rel_single] Waiting for ack %d\n", packet.seq_num);
+      printf("[send_rel_single] Waiting for ack %d\n", packet->seq_num);
       if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           printf("[send_rel_single] Timeout...\n");
@@ -333,7 +359,6 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
         }
         error("Error in recvfrom");
       }
-      printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
 
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
@@ -345,19 +370,16 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       continue;
     }
-    printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
-    printf("[send_rel_single] packet.seq_num = %d\n", packet.seq_num);
-    if (ack_packet.ack_num == packet.seq_num) {
+    if (ack_packet.ack_num == packet->seq_num) {
       printf("[send_rel_single] Ack %d received\n", ack_packet.ack_num);
       break;
     }
   }
   seq_num_send += 1;
-  printf("seq_num_send = %d\n", seq_num_send);
 
   set_timeout(fd, 1000000, 0);
     
-  //free(packet.data);
+  free(packet);
 }
 
 
@@ -379,8 +401,8 @@ void *send_rel_sender_thread(void *arg) {
   uint32_t next_seq_num = *base;
   uint32_t next_seq_num_start = next_seq_num;
 
-  udp_packet_t packets[num_packets];
-  memset(packets, 0, sizeof(packets));
+  udp_packet_t** packets = (udp_packet_t**) malloc(num_packets * sizeof(udp_packet_t*));
+  memset(packets, 0, num_packets * sizeof(udp_packet_t*));
   for (uint32_t i = 0; i < num_packets; i++) {
     bytes_read_funct(NULL, file, &packets[i]);
   }
@@ -393,20 +415,31 @@ void *send_rel_sender_thread(void *arg) {
         break;
       }
 
-      udp_packet_t packet = packets[next_seq_num - next_seq_num_start];
-      packet.seq_num = next_seq_num;
-      packet.checksum = calculate_checksum(&packet);
-      
+      uint16_t data_size = packets[next_seq_num - next_seq_num_start]->data_size;
+      udp_packet_t* packet = (udp_packet_t*) malloc(offsetof(struct temp, data) + data_size);
+      if (packet == NULL) {
+          printf("Errore di allocazione della memoria per packet\n");
+          break;
+      }
+      size_t offset = next_seq_num - next_seq_num_start;
+      memcpy(packet, packets[offset], offsetof(udp_packet_t, data) + data_size);
+
+      printf("packet.data_size = %d\n", packet->data_size);
+      packet->seq_num = next_seq_num;
+      packet->checksum = calculate_checksum(packet);
       thread_data->acked[next_seq_num % WINDOW_SIZE] = 0;
 
-      sendto(sockfd, &packet, sizeof(packet), 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
-      printf("Sent packet with seq_num %d\n", packet.seq_num);
+      sendto(sockfd, packet, offsetof(struct temp, data) + packet->data_size, 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
+
+      printf("Sent packet with seq_num %d\n", packet->seq_num);
 
       if (next_seq_num == *base) {
         printf("Setting timeout\n");
         *timer_start = time(NULL);
       }
       next_seq_num++;
+
+      free(packet);
     }
 
     pthread_cond_wait(cond, lock);
@@ -417,6 +450,12 @@ void *send_rel_sender_thread(void *arg) {
     }
     pthread_mutex_unlock(lock);
   }
+
+  // Dealloca la memoria
+  for (uint32_t i = 0; i < num_packets; i++) {
+    free(packets[i]);
+  }
+  free(packets);
 
   printf("End sender thread\n");
   pthread_exit(NULL);
@@ -604,7 +643,6 @@ void* handle_user(void* arg) {
   new_port_str[0] = '\0';
   snprintf(new_port_str, sizeof(new_port_str), "%u", new_port);
   printf("[%lu] Sending new port number\n", tid);
-  printf("fd: %d\n", sockfd);
   printf("new_socket: %d\n", new_socket);
   send_rel_single(new_socket, client_addr, new_port_str);
   printf("[%lu] New port number sent\n\n", tid);
@@ -624,7 +662,7 @@ void* handle_user(void* arg) {
     int option_int = atoi(option);
 
     if (option_int == 1) { // LIST
-      char list_command[MAXLINE];
+      char list_command[MAXLINE] = {0};
       list_command[0] = '\0';
       ls(list_command);
       send_rel_single(new_socket, client_addr, list_command);
@@ -632,7 +670,7 @@ void* handle_user(void* arg) {
 
     else if (option_int == 2) { // GET
       // list
-      char list_command[MAXLINE];
+      char list_command[MAXLINE] = {0};
       list_command[0] = '\0';
       ls(list_command);
       send_rel_single(new_socket, client_addr, list_command);
@@ -654,6 +692,8 @@ void* handle_user(void* arg) {
       fclose(file);
       printf("[%lu] Sending complete\n", tid);
       fflush(stdout);
+
+      free(FILENAME);
     }
     
     else if (option_int == 3) { // PUT

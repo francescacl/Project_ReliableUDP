@@ -150,8 +150,9 @@ void ls(char *list_command){
   list_command[bytes_read] = '\0';
 
   // Chiudi la pipe
-  pclose(pipe);
-  printf("%s folder contents:\n%s", DEST_PATH, list_command);
+  if (pclose(pipe) == -1) {
+    error("Error in closing the pipe");
+  }
 
 }
 
@@ -178,13 +179,13 @@ void create_conn(char *ip_address, uint16_t port) {
 
 
 int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, socklen_t *addr_length) { 
-  udp_packet_t packet;
   int totalReceived = 0;
   if (sockfd > 0) {
     int received = 0;
     while(size > 0) {
+      uint8_t buffer[MAX_SIZE_STRUCT] = {0};
       errno = 0;
-      if ((received = recvfrom(sockfd, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length)) < 0) {
+      if ((received = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)address, addr_length)) < 0) {
         if (errno == EINTR || errno == EAGAIN) {
           send_ack(sockfd, &servaddr, seq_num_recv-1);
           continue;
@@ -193,15 +194,24 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
         return -1;
       }
 
+      udp_packet_t *temp_packet = (udp_packet_t*) buffer;
+      udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
+
+      if (packet == NULL) {
+        error("malloc");
+      }
+
+      // Copia i dati nel nuovo buffer allocato
+      memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
+
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
-        printf("[wait_recv] Packet %d lost\n", packet.seq_num);
+        printf("[wait_recv] Packet %d lost\n", packet->seq_num);
         continue;
       }
 
-      printf("[wait_recv] Received packet with seq_num: %d\n", packet.seq_num);
-      printf("[wait_recv] Current seq_num_recv: %d\n", seq_num_recv);
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
+      printf("[wait_recv] Received packet with seq_num: %d\n", packet->seq_num);
+      if (packet->checksum == calculate_checksum(packet) && packet->seq_num == seq_num_recv) {
         send_ack(sockfd, &servaddr, seq_num_recv);
         seq_num_recv += 1;
       } else {
@@ -209,9 +219,11 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
         continue;
       }
 
-      memcpy(buff + totalReceived, packet.data, packet.data_size);
-      totalReceived += packet.data_size;
-      size -= packet.data_size;
+      memcpy(buff + totalReceived, packet->data, packet->data_size);
+      totalReceived += packet->data_size;
+      size -= packet->data_size;
+
+      free(packet);
     }
 
     return totalReceived;
@@ -221,14 +233,14 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
 
 
 
-int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length) {
+int recv_rel(int sock, char *buff, size_t dim, bool size_rcv, struct sockaddr_in *address, socklen_t *addr_length) {
   int k;
   if(!size_rcv) {
-    udp_packet_t packet;
+    char buffer[MAX_SIZE_STRUCT] = {0};
     set_timeout(sock, timeout_s, timeout_us);
     while(1) {
       errno = 0;
-      if (recvfrom(sock, &packet, sizeof(packet), 0, (struct sockaddr *)address, addr_length) < 0) {
+      if (recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)address, addr_length) < 0) {
         if (errno == EINTR || errno == EAGAIN /* timeout */) {
           printf("[recv_rel] errno: %d\n", errno);
           fflush(stdout);
@@ -238,22 +250,32 @@ int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_
         return -2;
       }
 
+      udp_packet_t *temp_packet = (udp_packet_t*) buffer;
+      udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
+
+      if (packet == NULL) {
+        error("malloc");
+      }
+
+      // Copia i dati nel nuovo buffer allocato
+      memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
+
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
-        printf("[recv_rel] Packet %d lost\n", packet.seq_num);
+        printf("[recv_rel] Packet %d lost\n", packet->seq_num);
         continue;
       }
 
-      k = packet.data_size;
-      memcpy(buffer, packet.data, k);
+      k = packet->data_size;
+      memcpy(buff, packet->data, k);
 
       if (address == NULL) {
-        servaddr.sin_port = htons(strtoul(buffer, NULL, 10));
-        printf("New port: %d\n", htonl(servaddr.sin_port));
+        servaddr.sin_port = htons(strtoul(packet->data, NULL, 10));
+        printf("New port: %d\n", htons(servaddr.sin_port));
       }
-      printf("[recv_rel] Received packet with seq_num: %d\n", packet.seq_num);
-      printf("[recv_rel] Current seq_num_recv: %d\n", seq_num_recv);
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num == seq_num_recv) {
+
+      printf("[recv_rel] Received packet with seq_num: %d\n", packet->seq_num);
+      if (packet->checksum == calculate_checksum(packet) && packet->seq_num == seq_num_recv) {
         printf("[recv_rel] Correct package, seq_num_recv++: %d\n", seq_num_recv+1);
         send_ack(sock, &servaddr, seq_num_recv);
         seq_num_recv += 1;
@@ -263,7 +285,7 @@ int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_
       }
     }
   } else {
-    k = wait_recv(buffer, dim, sock, address, addr_length);
+    k = wait_recv(buff, dim, sock, address, addr_length);
   }
   set_timeout(sock, 1000000, 0);
   return k;
@@ -271,30 +293,37 @@ int recv_rel(int sock, char *buffer, size_t dim, bool size_rcv, struct sockaddr_
 
 
 
-int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
-  char buff[MAXLINE];
-  int bytes_read;
+int bytes_read_funct(char **data, FILE* file, udp_packet_t** packet) {
+  char buff[MAXLINE] = {0};
+  uint32_t bytes_read;
   bool is_file = file != NULL;
 
-  // prepare packet to be sent
-  packet->seq_num = seq_num_send;
-  packet->ack_num = seq_num_recv-1;
-  memset(packet->data, 0, MAXLINE);
-  
   if (is_file) {
     bytes_read = fread(buff, 1, MAXLINE, file);
-    memcpy(packet->data, buff, bytes_read);
   } else {
     bytes_read = strlen(*data);
     if (bytes_read > MAXLINE) {
       bytes_read = MAXLINE;
     }
-    memcpy(packet->data, *data, bytes_read);
   }
 
-  packet->data_size = bytes_read;
-  packet->checksum = calculate_checksum(packet);
-  
+  // prepare packet to be sent
+  *packet = malloc(offsetof(struct temp, data) + bytes_read);
+  if (*packet == NULL) {
+    error("malloc");
+  }
+
+  (*packet)->seq_num = seq_num_send;
+  (*packet)->ack_num = seq_num_recv-1;
+  (*packet)->data_size = bytes_read;
+  for(uint32_t i = 0; i < bytes_read; i++) {
+    if (is_file) {
+      (*packet)->data[i] = buff[i];
+    } else {
+      (*packet)->data[i] = (*data)[i];
+    }
+  }
+  (*packet)->checksum = calculate_checksum(*packet);
   if (!is_file) {
     *data += bytes_read;
   }
@@ -305,7 +334,7 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t* packet) {
 
 
 void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last) {
-  udp_packet_t packet;
+  udp_packet_t* packet;
   uint32_t counter = 0;
   int bytes_read = bytes_read_funct(&data, NULL, &packet);
   if (bytes_read < 0) {
@@ -315,16 +344,15 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
   set_timeout(fd, timeout_s, timeout_us);
 
   while(1) {
-    printf("[send_rel_single] Sending packet %d\n", packet.seq_num);
-    if (sendto(fd, &packet, sizeof(packet), 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
+    printf("[send_rel_single] Sending packet %d\n", packet->seq_num);
+    if (sendto(fd, packet, offsetof(struct temp, data) + packet->data_size, 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
       error("Error in sendto");
 
     // wait for ack
     udp_packet_t ack_packet;
     while (1) {
-      memset(&ack_packet, 0, sizeof(ack_packet));
       errno = 0;
-      printf("[send_rel_single] Waiting for ack %d\n", packet.seq_num);
+      printf("[send_rel_single] Waiting for ack %d\n", packet->seq_num);
       if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           counter++;
@@ -334,7 +362,6 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
         }
         error("Error in recvfrom");
       }
-      printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
 
       double random_number = (double)rand() / RAND_MAX;
       printf("[send_rel_single] random_number: %f\n", random_number);
@@ -344,18 +371,20 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
       }
       break;
     }
+
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       continue;
     }
-    printf("[send_rel_single] ack_packet.ack_num %d\n", ack_packet.ack_num);
-    printf("[send_rel_single] packet.seq_num = %d\n", packet.seq_num);
-    if (ack_packet.ack_num == packet.seq_num) {
+    if (ack_packet.ack_num == packet->seq_num) {
       printf("[send_rel_single] Ack %d received\n", ack_packet.ack_num);
       break;
     }
   }
   seq_num_send += 1;
+
   set_timeout(fd, 1000000, 0);
+
+  free(packet);
 }
 
 
@@ -377,8 +406,8 @@ void *send_rel_sender_thread(void *arg) {
   uint32_t next_seq_num = *base;
   uint32_t next_seq_num_start = next_seq_num;
 
-  udp_packet_t packets[num_packets];
-  memset(packets, 0, sizeof(packets));
+  udp_packet_t** packets = (udp_packet_t**) malloc(num_packets * sizeof(udp_packet_t*));
+  memset(packets, 0, num_packets * sizeof(udp_packet_t*));
   for (uint32_t i = 0; i < num_packets; i++) {
     bytes_read_funct(NULL, file, &packets[i]);
   }
@@ -391,20 +420,31 @@ void *send_rel_sender_thread(void *arg) {
         break;
       }
 
-      udp_packet_t packet = packets[next_seq_num - next_seq_num_start];
-      packet.seq_num = next_seq_num;
-      packet.checksum = calculate_checksum(&packet);
-      
+      uint16_t data_size = packets[next_seq_num - next_seq_num_start]->data_size;
+      udp_packet_t* packet = (udp_packet_t*) malloc(offsetof(struct temp, data) + data_size);
+      if (packet == NULL) {
+          printf("Errore di allocazione della memoria per packet\n");
+          break;
+      }
+      size_t offset = next_seq_num - next_seq_num_start;
+      memcpy(packet, packets[offset], offsetof(udp_packet_t, data) + data_size);
+
+      printf("packet.data_size = %d\n", packet->data_size);
+      packet->seq_num = next_seq_num;
+      packet->checksum = calculate_checksum(packet);
       thread_data->acked[next_seq_num % WINDOW_SIZE] = 0;
 
-      sendto(sockfd, &packet, sizeof(packet), 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
-      printf("Sent packet with seq_num %d\n", packet.seq_num);
+      sendto(sockfd, packet, offsetof(struct temp, data) + packet->data_size, 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
+
+      printf("Sent packet with seq_num %d\n", packet->seq_num);
 
       if (next_seq_num == *base) {
         printf("Setting timeout\n");
         *timer_start = time(NULL);
       }
       next_seq_num++;
+
+      free(packet);
     }
 
     pthread_cond_wait(cond, lock);
@@ -415,6 +455,12 @@ void *send_rel_sender_thread(void *arg) {
     }
     pthread_mutex_unlock(lock);
   }
+
+  // Dealloca la memoria
+  for (uint32_t i = 0; i < num_packets; i++) {
+      free(packets[i]);
+  }
+  free(packets);
 
   printf("End sender thread\n");
   pthread_exit(NULL);
@@ -576,8 +622,8 @@ int wait_for_input(int count, char* buff_in) {
 
     // Controllare se c'è input dalla socket
     if (FD_ISSET(sockfd, &readfds)) {
-      udp_packet_t packet;
-      if (recvfrom(sockfd, &packet, sizeof(packet), 0, NULL, NULL) < 0) {
+      char buffer[MAX_SIZE_STRUCT] = {0};
+      if (recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL) < 0) {
         if (errno == EINTR || errno == EAGAIN /* timeout */) {
           printf("[wait_for_input] errno: %d\n", errno);
           fflush(stdout);
@@ -585,7 +631,18 @@ int wait_for_input(int count, char* buff_in) {
         }
         error("Error in recvfrom");
       }
-      if (packet.checksum == calculate_checksum(&packet) && packet.seq_num < seq_num_recv) {
+
+      udp_packet_t *temp_packet = (udp_packet_t*) buffer;
+      udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
+
+      if (packet == NULL) {
+        error("malloc");
+      }
+
+      // Copia i dati nel nuovo buffer allocato
+      memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
+
+      if (packet->checksum == calculate_checksum(packet) && packet->seq_num < seq_num_recv) {
         send_ack(sockfd, &servaddr, seq_num_recv-1);
       }
     }
@@ -598,6 +655,7 @@ int wait_for_input(int count, char* buff_in) {
 
 void list_option(socklen_t servaddr_len, int option, char **name) {
   
+  char list_str[MAXLINE] = {0};
   recv_rel(sockfd, list_str, MAXLINE, false, &servaddr, &servaddr_len);
 
   // Salvo la lunghezza delle singole stringhe
@@ -668,6 +726,7 @@ void get_option(socklen_t servaddr_len) {
   size_rcv_str[j] = '\0';
   uint32_t size_rcv = (uint32_t)strtol(size_rcv_str, NULL, 10);
   uint32_t size_next = ntohl(size_rcv);
+  printf("File size: %u\n", size_next);
  
   char recvline[size_next + 1];
   n = recv_rel(sockfd, recvline, size_next, true, &servaddr, &servaddr_len);
@@ -683,9 +742,14 @@ void get_option(socklen_t servaddr_len) {
   if (fwrite(recvline, 1, n, file) != (size_t) n) {
     error("Error in file writing");
   }
-  fclose(file); // Chiusura del file
+  if (fclose(file) != 0) {
+    error("Error in file closing");
+  }
   printf("File saved successfully in: %s\n\n", path);
   fflush(stdout);
+
+  free(name);
+  free(path);
 }
 
 
@@ -760,6 +824,8 @@ void put_option() {
   fclose(file_to_save);
   printf("Sending complete\n");
   fflush(stdout);
+
+  free(file_to_send);
 }
 
 
@@ -776,7 +842,7 @@ int main(int argc, char *argv[]) {
   printf("Connection with main established\n");
   fflush(stdout);
   //char *new = '\0'
-  char *new = "new\0";
+  char *new = "new";
   printf("Sending request\n");
   send_rel_single(sockfd, servaddr, new, false);
   printf("Request sent\n\n");
