@@ -385,80 +385,141 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data) {
 
 
 void *send_rel_sender_thread(void *arg) {
-  // parsa arg
-  thread_data_t* thread_data;
-  thread_data = (thread_data_t *) arg;
-  int sockfd = thread_data->sockfd;
-  struct sockaddr_in server_addr = thread_data->addr;
-  FILE* file = thread_data->file;
-  uint32_t *base = thread_data->base;
-  pthread_mutex_t *lock = thread_data->lock;
-  pthread_cond_t *cond = thread_data->cond;
-  atomic_bool *end_thread = thread_data->end_thread;
-  time_t *timer_start = thread_data->timer_start;
-  const uint32_t num_packets = thread_data->num_packets;
+    // parsa arg
+    thread_data_t* thread_data;
+    thread_data = (thread_data_t *) arg;
+    int sockfd = thread_data->sockfd;
+    struct sockaddr_in server_addr = thread_data->addr;
+    FILE* file = thread_data->file;
+    uint32_t *base = thread_data->base;
+    pthread_mutex_t *lock = thread_data->lock;
+    pthread_cond_t *cond = thread_data->cond;
+    atomic_bool *end_thread = thread_data->end_thread;
+    struct timeval *timer_start = thread_data->timer_start;
+    const uint32_t num_packets = thread_data->num_packets;
 
-  uint32_t next_seq_num = *base;
-  uint32_t next_seq_num_start = next_seq_num;
+    uint32_t next_seq_num = *base;
+    uint32_t next_seq_num_start = next_seq_num;
+    uint32_t ack_rtt = next_seq_num_start;
+    atomic_int *new_acks = thread_data->new_acks;
+    atomic_bool *duplicate_acks = thread_data->duplicate_acks;
+    printf("num_packets: %d\n", num_packets);
 
-  udp_packet_t** packets = (udp_packet_t**) malloc(num_packets * sizeof(udp_packet_t*));
-  memset(packets, 0, num_packets * sizeof(udp_packet_t*));
-  for (uint32_t i = 0; i < num_packets; i++) {
-    bytes_read_funct(NULL, file, &packets[i]);
-  }
-
-  while (!atomic_load(end_thread)) {
-    pthread_mutex_lock(lock);
-
-    while (next_seq_num < (*base) + WINDOW_SIZE) {
-      if (next_seq_num == num_packets + next_seq_num_start) {
-        break;
-      }
-
-      uint16_t data_size = packets[next_seq_num - next_seq_num_start]->data_size;
-      udp_packet_t* packet = (udp_packet_t*) malloc(offsetof(struct temp, data) + data_size);
-      if (packet == NULL) {
-          printf("Errore di allocazione della memoria per packet\n");
-          break;
-      }
-      size_t offset = next_seq_num - next_seq_num_start;
-      memcpy(packet, packets[offset], offsetof(udp_packet_t, data) + data_size);
-
-      printf("packet.data_size = %d\n", packet->data_size);
-      packet->seq_num = next_seq_num;
-      packet->checksum = calculate_checksum(packet);
-      thread_data->acked[next_seq_num % WINDOW_SIZE] = 0;
-
-      sendto(sockfd, packet, offsetof(struct temp, data) + packet->data_size, 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
-
-      printf("Sent packet with seq_num %d\n", packet->seq_num);
-
-      if (next_seq_num == *base) {
-        printf("Setting timeout\n");
-        *timer_start = time(NULL);
-      }
-      next_seq_num++;
-
-      free(packet);
+    udp_packet_t** packets = (udp_packet_t**) malloc(num_packets * sizeof(udp_packet_t*));
+    memset(packets, 0, num_packets * sizeof(udp_packet_t*));
+    for (uint32_t i = 0; i < num_packets; i++) {
+        bytes_read_funct(NULL, file, &packets[i]);
     }
 
-    pthread_cond_wait(cond, lock);
-    if (difftime(time(NULL), *timer_start) > ((double) timeout_s + (double) timeout_us / 1000000)) {
-      printf("\t\tTimeout\n");
-      memset(thread_data->acked, 0, WINDOW_SIZE * sizeof(bool));
-      next_seq_num = *base;
+    uint32_t cwnd = 1; // Congestion window starts from 1
+    uint32_t ssthresh = WINDOW_SIZE; // Set a high initial threshold
+    
+    while (!atomic_load(end_thread)) {
+        pthread_mutex_lock(lock);
+        //printf("CWND: %d\n", cwnd);
+
+        // Send packets within the current cwnd
+        while (next_seq_num < (*base) + cwnd && next_seq_num < num_packets + next_seq_num_start) {
+            //pthread_cond_wait(cond, lock);
+            if (*base == num_packets + next_seq_num_start + 1) {
+                break;
+            }
+
+            uint16_t data_size = packets[next_seq_num - next_seq_num_start]->data_size;
+            udp_packet_t* packet = (udp_packet_t*) malloc(offsetof(struct temp, data) + data_size);
+            if (packet == NULL) {
+                printf("Errore di allocazione della memoria per packet\n");
+                break;
+            }
+            size_t offset = next_seq_num - next_seq_num_start;
+            memcpy(packet, packets[offset], offsetof(udp_packet_t, data) + data_size);
+
+            //printf("packet.data_size = %d\n", packet->data_size);
+            packet->seq_num = next_seq_num;
+            packet->checksum = calculate_checksum(packet);
+           
+            sendto(sockfd, packet, offsetof(struct temp, data) + packet->data_size, 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
+
+            // printf("Sent packet with seq_num %d\n", packet->seq_num);
+
+            if (next_seq_num == *base) {
+                gettimeofday(timer_start, NULL);
+            }
+            next_seq_num++;
+
+            free(packet);
+        }
+
+        if (*base == num_packets + next_seq_num_start + 1) {
+            pthread_mutex_unlock(lock);
+            break; // Uscita dal ciclo se tutti i pacchetti sono stati inviati
+        }
+
+        pthread_cond_wait(cond, lock);
+
+        // Handle timeout
+        //if (difftime(time(NULL), *timer_start) > ((double) timeout_s + (double) timeout_us / 1000000)) {
+        struct timeval timer_now;
+        gettimeofday(&timer_now, NULL);
+        double diff_seconds = difftime(timer_now.tv_sec, timer_start->tv_sec);
+        double diff_microseconds = (timer_now.tv_usec - timer_start->tv_usec) / 1e6;
+        double diff = diff_seconds + diff_microseconds;
+        if (diff > ((double) timeout_s + (double) timeout_us / 1000000)) {
+            printf("\t\tTimeout\n");
+            memset(thread_data->acked + *base, 0, (cwnd) * sizeof(bool));
+            printf("TIMEOUT: ssthresh: %d\t\tcwnd PRIMA:%d\n", ssthresh, cwnd);
+            next_seq_num = *base;
+            ssthresh = cwnd / 2;
+            cwnd = 1; // Reset cwnd on timeout
+            printf("TIMEOUT: ssthresh: %d\t\tcwnd dopo:%d\n", ssthresh, cwnd);
+            atomic_store(duplicate_acks, 0);
+            atomic_store(new_acks, 0);
+        }
+
+        // Process received ACKs and update base and cwnd
+        for (uint32_t i = (*base) - next_seq_num_start -1; i < num_packets; i++) {
+            if (thread_data->acked[i] && !atomic_load(duplicate_acks)) { 
+            printf("*base: %d\ti: %d\n", *base, i);
+                //printf("cwnd: %d\t\tssthresh: %d\n", cwnd, ssthresh);
+                // Slow start or congestion avoidance
+                if (cwnd < ssthresh) {
+                    printf("1: ssthresh: %d\t\tcwnd prima:%d\n", ssthresh, cwnd);
+                    cwnd += atomic_load(new_acks); // Exponential growth
+                    atomic_store(new_acks, 0);
+                    printf("1: ssthresh: %d\t\tcwnd dopo:%d\n", ssthresh, cwnd);
+                } else if ((thread_data->acked[i] && i == ack_rtt)) {
+                    ack_rtt = next_seq_num;
+                    printf("2: ssthresh: %d\t\tcwnd prima:%d\n", ssthresh, cwnd);
+                    cwnd++; // Linear growth
+                    printf("2: ssthresh: %d\t\tcwnd dopo:%d\n", ssthresh, cwnd);
+                    atomic_store(new_acks, 0);
+                }
+                atomic_store(duplicate_acks, false); // Reset duplicate ACKs count
+            } else if (atomic_load(duplicate_acks)){
+                atomic_store(duplicate_acks, false);
+                atomic_store(new_acks, 0);
+                printf("3: ssthresh: %d\t\tcwnd prima:%d\n", ssthresh, cwnd);
+                ssthresh = cwnd / 2;
+                cwnd = ssthresh + 3; // Fast recovery
+                next_seq_num = *base;
+                printf("3: ssthresh: %d\t\tcwnd dopo:%d\n", ssthresh, cwnd);
+                //pthread_cond_signal(cond);
+                //pthread_mutex_unlock(lock);
+                break;
+            }
+        }
+        //pthread_cond_signal(cond);   
+        pthread_mutex_unlock(lock);
     }
-    pthread_mutex_unlock(lock);
-  }
 
-  // Dealloca la memoria
-  for (uint32_t i = 0; i < num_packets; i++) {
-    free(packets[i]);
-  }
-  free(packets);
+    // Dealloca la memoriabase
+    for (uint32_t i = 0; i < num_packets; i++) {
+        free(packets[i]);
+    }
+    free(packets);
 
-  printf("End sender thread\n");
-  pthread_exit(NULL);
+    printf("End sender thread\n");
+    pthread_exit(NULL);
 }
 
 
@@ -473,15 +534,27 @@ void *send_rel_receiver_thread(void *arg) {
   pthread_mutex_t *lock = thread_data->lock;
   pthread_cond_t *cond = thread_data->cond;
   atomic_bool *end_thread = thread_data->end_thread;
-  time_t *timer_start = thread_data->timer_start;
+  struct timeval *timer_start = thread_data->timer_start;
+  atomic_int *new_acks = thread_data->new_acks;
+  atomic_bool *duplicate_acks = thread_data->duplicate_acks;
 
   uint32_t seq_num_start = *base;
+  int dupl_a = 0;
 
-  set_timeout(sockfd, timeout_s, timeout_us);
-
+  set_timeout(sockfd, timeout_s, timeout_us); // che fa sto coso?
+  printf("num_packets: %d\n", num_packets);
   while (!atomic_load(end_thread)) {
     udp_packet_t ack_packet;
+    printf("*base - seq_num_start + 1: %d\n", *base - seq_num_start + 1);
+    //if (*base - seq_num_start + 1 == num_packets) {
+    //  printf("QUI\n");
+    //  set_timeout(sockfd, timeout_s, timeout_us);
+    //}
     if (recvfrom(sockfd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
+      //if (*base - seq_num_start + 1 == num_packets && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      //  printf("QUOQUA\n");
+      //  break;
+      //}
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         pthread_cond_signal(cond);
         continue;
@@ -503,20 +576,41 @@ void *send_rel_receiver_thread(void *arg) {
       break;
     }
     pthread_mutex_lock(lock);
-
+    //printf("\nREC\n\n");
     if (ack_num >= (*base)) {
-      for (uint32_t i = *base; i < ack_num; i++) {
-        thread_data->acked[i % WINDOW_SIZE] = 1;
+      dupl_a = 0;
+      int count = 0;
+      for (uint32_t i = *base; i <= ack_num && i < num_packets + seq_num_start; i++) {
+        //printf("i: %d\t (*base) - seq_num_start: %d\n", i, (*base) - seq_num_start);
+        int new_a = atomic_load(new_acks) + 1;
+        atomic_store(new_acks, new_a);
+        if (i == ack_num) {
+          thread_data->acked[ack_num - seq_num_start] = true;
+        }
+        count++;
       }
 
-      *timer_start = time(NULL);
-
-      while (thread_data->acked[(*base) % WINDOW_SIZE]) {
-        (*base)++;
-      }
+      printf("ack_num: %d\t\tbase: %d\t\tcount: %d\n", ack_num, *base, count);
+      gettimeofday(timer_start, NULL);
+      (*base) += count;
       pthread_cond_signal(cond);
+    } else {
+      if (thread_data->acked[ack_num - seq_num_start]) {
+        dupl_a += 1;
+        printf("DUPLICATED ACKS: %d\n", dupl_a);
+        if (dupl_a >= 3) {
+          printf("QUI\n");
+          atomic_store(duplicate_acks, true);
+          pthread_mutex_unlock(lock);
+          pthread_cond_signal(cond);
+          //pthread_cond_wait(cond, lock);
+          dupl_a = 0;
+          continue;
+        }
+      } else {
+        thread_data->acked[ack_num - seq_num_start] = true;
+      }
     }
-
     pthread_mutex_unlock(lock);
   }
 
@@ -542,27 +636,37 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
   pthread_cond_t cond;
   pthread_mutex_init(&lock, NULL);
   pthread_cond_init(&cond, NULL);
-  time_t timer_start;
+  struct timeval timer_start;
 
   atomic_bool end_thread;
   end_thread = ATOMIC_VAR_INIT(false);
   atomic_store(&end_thread, false);
 
+  atomic_int new_acks;
+  new_acks = ATOMIC_VAR_INIT(0);
+  atomic_store(&new_acks, 0);
+
+  atomic_bool duplicate_acks;
+  duplicate_acks = ATOMIC_VAR_INIT(false);
+  atomic_store(&duplicate_acks, false);
+
   uint32_t base = seq_num_send;
-  bool acked[WINDOW_SIZE];
-  memset(acked, 0, sizeof(acked));
+  printf("base: %d\n", base);
+  uint32_t num_pack = num_packets(size_file);
 
   thread_data_t thread_data;
   thread_data.sockfd = fd;
   thread_data.addr = send_addr;
-  thread_data.num_packets = num_packets(size_file);
+  thread_data.num_packets = num_pack;
   thread_data.file = file;
   thread_data.base = &base;
   thread_data.lock = &lock;
   thread_data.cond = &cond;
   thread_data.end_thread = &end_thread;
-  thread_data.acked = malloc(WINDOW_SIZE * sizeof(bool));
+  thread_data.new_acks = &new_acks;
+  thread_data.acked = calloc(num_pack, sizeof(bool));
   thread_data.timer_start = &timer_start;
+  thread_data.duplicate_acks = &duplicate_acks;
 
   pthread_t sender, receiver;
   pthread_create(&sender, NULL, send_rel_sender_thread, &thread_data);
@@ -593,9 +697,6 @@ void* handle_user(void* arg) {
   FILE *file;
   seq_num_send = 0;
   seq_num_recv = 1;
-  duplicated_ack = 0;
-  ssthresh = 64;
-  cwnd = 1;
 
   // ottiene il thread id
   tid = pthread_self();

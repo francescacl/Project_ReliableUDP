@@ -400,7 +400,7 @@ void *send_rel_sender_thread(void *arg) {
   pthread_mutex_t *lock = thread_data->lock;
   pthread_cond_t *cond = thread_data->cond;
   atomic_bool *end_thread = thread_data->end_thread;
-  time_t *timer_start = thread_data->timer_start;
+  struct timeval *timer_start = thread_data->timer_start;
   const uint32_t num_packets = thread_data->num_packets;
 
   uint32_t next_seq_num = *base;
@@ -440,7 +440,7 @@ void *send_rel_sender_thread(void *arg) {
 
       if (next_seq_num == *base) {
         printf("Setting timeout\n");
-        *timer_start = time(NULL);
+        gettimeofday(timer_start, NULL);
       }
       next_seq_num++;
 
@@ -448,7 +448,13 @@ void *send_rel_sender_thread(void *arg) {
     }
 
     pthread_cond_wait(cond, lock);
-    if (difftime(time(NULL), *timer_start) > ((double) timeout_s + (double) timeout_us / 1000000)) {
+    //if (difftime(time(NULL), *timer_start) > ((double) timeout_s + (double) timeout_us / 1000000)) {
+    struct timeval timer_now;
+    gettimeofday(&timer_now, NULL);
+    double diff_seconds = difftime(timer_now.tv_sec, timer_start->tv_sec);
+    double diff_microseconds = (timer_now.tv_usec - timer_start->tv_usec) / 1e6;
+    double diff = diff_seconds + diff_microseconds;
+    if (diff > ((double) timeout_s + (double) timeout_us / 1000000)) {
       printf("\t\tTimeout\n");
       memset(thread_data->acked, 0, WINDOW_SIZE * sizeof(bool));
       next_seq_num = *base;
@@ -478,7 +484,7 @@ void *send_rel_receiver_thread(void *arg) {
   pthread_mutex_t *lock = thread_data->lock;
   pthread_cond_t *cond = thread_data->cond;
   atomic_bool *end_thread = thread_data->end_thread;
-  time_t *timer_start = thread_data->timer_start;
+  struct timeval *timer_start = thread_data->timer_start;
 
   uint32_t seq_num_start = *base;
 
@@ -514,7 +520,7 @@ void *send_rel_receiver_thread(void *arg) {
         thread_data->acked[i % WINDOW_SIZE] = 1;
       }
 
-      *timer_start = time(NULL);
+      gettimeofday(timer_start, NULL);
 
       while (thread_data->acked[(*base) % WINDOW_SIZE]) {
         (*base)++;
@@ -548,7 +554,7 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
   pthread_cond_t cond;
   pthread_mutex_init(&lock, NULL);
   pthread_cond_init(&cond, NULL);
-  time_t timer_start;
+  struct timeval timer_start;
 
   atomic_bool end_thread;
   end_thread = ATOMIC_VAR_INIT(false);

@@ -21,7 +21,7 @@
 
 
 #define LONG_TIMEOUT  60 // TODO
-#define MAXLINE		    32768
+#define MAXLINE		    2048 //32768
 #define MAXVECT       512
 #define WINDOW_SIZE   5
 #define SERV_PORT	    5193
@@ -58,7 +58,7 @@ typedef struct {
   pthread_cond_t *cond;
   atomic_bool *end_thread;
   bool *acked;
-  time_t *timer_start;
+  struct timeval *timer_start;
 } thread_data_t;
 
 // Funzioni

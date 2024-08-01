@@ -21,10 +21,11 @@
 
 
 #define LONG_TIMEOUT  60 // TODO
-#define MAXLINE		    32768
+#define MAXLINE		    2048 //32768
 #define SERV_PORT	    5193
-#define WINDOW_SIZE   10
+#define WINDOW_SIZE   64
 #define FILENAME_PATH "files/server/"
+#define MSS           2048
 
 #pragma pack(1)
 typedef struct {
@@ -57,8 +58,19 @@ typedef struct {
   pthread_cond_t *cond;
   atomic_bool *end_thread;
   bool *acked;
-  time_t *timer_start;
+  struct timeval *timer_start;
+  atomic_bool *duplicate_acks;
+  atomic_int *new_acks;
 } thread_data_t;
+
+
+typedef struct {
+    udp_packet_t **packets;
+    bool *acked;
+    uint32_t size;
+    uint32_t capacity;
+} dynamic_array_t;
+
 
 // Funzioni
 int bytes_read_funct(char **data, FILE* file, udp_packet_t** packet);
@@ -90,9 +102,5 @@ struct sockaddr_in addr;
 __thread uint32_t seq_num_send;
 __thread uint32_t seq_num_recv;
 __thread pthread_t tid;
-__thread uint32_t duplicated_ack;
-__thread uint32_t ssthresh;
-__thread uint32_t cwnd;
-__thread uint32_t fase; // 0 = slow start, 1 = congestion avoidance, 2 = fast recovery
 
 #endif // SERVER_H
