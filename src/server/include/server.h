@@ -20,8 +20,7 @@
 #include <unistd.h>
 
 
-#define LONG_TIMEOUT  60 // TODO
-#define MAXLINE		    2048 //32768
+#define MAXLINE		    2048
 #define SERV_PORT	    5193
 #define WINDOW_SIZE   64
 #define FILENAME_PATH "files/server/"
@@ -63,16 +62,7 @@ typedef struct {
   atomic_int *new_acks;
 } thread_data_t;
 
-
-typedef struct {
-    udp_packet_t **packets;
-    bool *acked;
-    uint32_t size;
-    uint32_t capacity;
-} dynamic_array_t;
-
-
-// Funzioni
+// Function
 int bytes_read_funct(char **data, FILE* file, udp_packet_t** packet);
 uint32_t calculate_checksum(udp_packet_t *packet);
 void check_args(int argc, char *argv[]);
@@ -90,7 +80,7 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data);
 void set_timeout(int sock, int timeout_s, int timeout_us);
 int wait_recv(char *buff, long size, int , struct sockaddr_in *address, socklen_t *addr_length, struct sockaddr_in *client_addr);
 
-// Variabili
+// Variables
 int timeout_s;
 int timeout_us;
 double loss_prob;
@@ -98,7 +88,7 @@ int sockfd;
 socklen_t len;
 struct sockaddr_in addr;
 
-// Variabili threads
+// Thread local variables
 __thread uint32_t seq_num_send;
 __thread uint32_t seq_num_recv;
 __thread pthread_t tid;

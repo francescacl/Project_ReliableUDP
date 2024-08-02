@@ -10,7 +10,7 @@ void error(const char *msg) {
 
 
 void check_args(int argc, char *argv[]) {
-  if (argc != 4) { /* controlla numero degli argomenti */
+  if (argc != 4) { // check args num
     printf("Wrong number of arguments\n");
     fprintf(stderr, "usage: client <server IP address> <packet loss probability> <timeout [ms]>\n");
     exit(1);
@@ -43,13 +43,13 @@ void check_args(int argc, char *argv[]) {
 
 
 size_t file_size(char *filename) {
-/* Ritorna la grandezza del file in byte */
+  // Return file size [bytes]
   FILE *file = fopen(filename, "rb");
   size_t fsize = -1;
 
   if (file != NULL) {
-    if (fseek(file, 0, SEEK_END) == 0) { // Sposta l'indicatore di posizione alla fine del file
-      fsize = ftell(file); // La posizione corrente corrisponde alla dimensione del file
+    if (fseek(file, 0, SEEK_END) == 0) { // Shift the file pointer to the end of the file
+      fsize = ftell(file); // Current position corresponds to the size of the file
     }
   fclose(file);
   }
@@ -63,13 +63,13 @@ uint32_t calculate_checksum(udp_packet_t *packet) {
     uint32_t checksum = 0;
     uint32_t sum = 0;
     
-    // Somma seq_num e ack_num come sequenze di 16 bit
+     // Sum header fields
     sum += (packet->seq_num >> 16) & 0xFFFF;
     sum += packet->seq_num & 0xFFFF;
     sum += (packet->ack_num >> 16) & 0xFFFF;
     sum += packet->ack_num & 0xFFFF;
 
-    // Somma i dati come sequenze di 16 bit
+    // Sum data
     for (int i = 0; i < packet->data_size; i += 2) {
         uint16_t word = packet->data[i];
         if (i + 1 < packet->data_size) {
@@ -78,12 +78,12 @@ uint32_t calculate_checksum(udp_packet_t *packet) {
         sum += word;
     }
 
-    // Aggiungi eventuali riporti alla fine della somma
+    // Add returned carry to the sum
     while (sum >> 16) {
         sum = (sum & 0xFFFF) + (sum >> 16);
     }
 
-    // Inverti i bit del risultato finale
+    // One's complement of the sum
     checksum = ~sum;
 
     return checksum;
@@ -92,7 +92,7 @@ uint32_t calculate_checksum(udp_packet_t *packet) {
 
 
 char* file_path(char *fpath, char *fname) {
-/* Ritorna il path del file concatenato al nome del file */
+  // Return file_path
   size_t len1 = strlen(fpath);
   size_t len2 = strlen(fname);
 
@@ -129,7 +129,6 @@ void send_ack(int sockfd, struct sockaddr_in* address, uint32_t ack_num) {
   if (sendto(sockfd, &ack_packet, sizeof(ack_packet), 0, (struct sockaddr*) address, (socklen_t) sizeof(*address)) < 0) {
     error("Error in send_ack");
   }
-  printf("[send_ack] Ack sent with ack_num %d\n", ack_num);
 }
 
 
@@ -142,14 +141,11 @@ void ls(char *list_command){
   if (pipe == NULL) {
     error("Error in opening the pipe");
   }
-  // Leggi l'output del comando e salvalo in una stringa
+  // Read the output of the command and save it in a string
   size_t bytes_read = fread(list_command, 1, MAXLINE, pipe);
-  if (bytes_read == 0) {
-    error("Error in reading the output of the command");
-  }
   list_command[bytes_read] = '\0';
 
-  // Chiudi la pipe
+  // Close the pipe
   if (pclose(pipe) == -1) {
     error("Error in closing the pipe");
   }
@@ -160,15 +156,15 @@ void ls(char *list_command){
 
 void create_conn(char *ip_address, uint16_t port) {
 
-  if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { /* crea la socket */
+  if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { // create the socket
     error("Error in socket");
   }
   
-  memset(&servaddr, 0, sizeof(servaddr));      /* azzera servaddr */
-  servaddr.sin_family = AF_INET;       /* assegna il tipo di indirizzo */
-  servaddr.sin_port = port;  /* assegna la porta del server */
-  /* assegna l'indirizzo del server prendendolo dalla riga di comando. L'indirizzo è una stringa da convertire in intero secondo network byte order. */
-  if (inet_pton(AF_INET, ip_address, &servaddr.sin_addr) <= 0) { /* inet_pton (p=presentation) vale anche per indirizzi IPv6 */
+  memset(&servaddr, 0, sizeof(servaddr)); 
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_port = port;  // assign the port number
+  // assign the server address by taking it from the command line. The address is a string to be converted to an integer according to network byte order.
+  if (inet_pton(AF_INET, ip_address, &servaddr.sin_addr) <= 0) {
     fprintf(stderr, "Error in inet_pton for %s", ip_address);
     exit(1);
   }
@@ -201,16 +197,14 @@ int wait_recv(char *buff, long size, int sockfd, struct sockaddr_in *address, so
         error("malloc");
       }
 
-      // Copia i dati nel nuovo buffer allocato
+      // Copy data to the new allocated buffer
       memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
 
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
-        printf("[wait_recv] Packet %d lost\n", packet->seq_num);
         continue;
       }
 
-      printf("[wait_recv] Received packet with seq_num: %d\n", packet->seq_num);
       if (packet->checksum == calculate_checksum(packet) && packet->seq_num == seq_num_recv) {
         send_ack(sockfd, &servaddr, seq_num_recv);
         seq_num_recv += 1;
@@ -242,7 +236,6 @@ int recv_rel(int sock, char *buff, size_t dim, bool size_rcv, struct sockaddr_in
       errno = 0;
       if (recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)address, addr_length) < 0) {
         if (errno == EINTR || errno == EAGAIN /* timeout */) {
-          printf("[recv_rel] errno: %d\n", errno);
           fflush(stdout);
           continue;
         }
@@ -254,15 +247,14 @@ int recv_rel(int sock, char *buff, size_t dim, bool size_rcv, struct sockaddr_in
       udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
 
       if (packet == NULL) {
-        error("malloc");
+        error("Malloc");
       }
 
-      // Copia i dati nel nuovo buffer allocato
+      // Copy data to the new allocated buffer
       memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
 
       double random_number = (double)rand() / RAND_MAX;
       if (random_number < loss_prob) {
-        printf("[recv_rel] Packet %d lost\n", packet->seq_num);
         continue;
       }
 
@@ -271,12 +263,9 @@ int recv_rel(int sock, char *buff, size_t dim, bool size_rcv, struct sockaddr_in
 
       if (address == NULL) {
         servaddr.sin_port = htons(strtoul(packet->data, NULL, 10));
-        printf("New port: %d\n", htons(servaddr.sin_port));
       }
 
-      printf("[recv_rel] Received packet with seq_num: %d\n", packet->seq_num);
       if (packet->checksum == calculate_checksum(packet) && packet->seq_num == seq_num_recv) {
-        printf("[recv_rel] Correct package, seq_num_recv++: %d\n", seq_num_recv+1);
         send_ack(sock, &servaddr, seq_num_recv);
         seq_num_recv += 1;
         break;
@@ -310,7 +299,7 @@ int bytes_read_funct(char **data, FILE* file, udp_packet_t** packet) {
   // prepare packet to be sent
   *packet = malloc(offsetof(struct temp, data) + bytes_read);
   if (*packet == NULL) {
-    error("malloc");
+    error("Malloc");
   }
 
   (*packet)->seq_num = seq_num_send;
@@ -344,7 +333,6 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
   set_timeout(fd, timeout_s, timeout_us);
 
   while(1) {
-    printf("[send_rel_single] Sending packet %d\n", packet->seq_num);
     if (sendto(fd, packet, offsetof(struct temp, data) + packet->data_size, 0, (struct sockaddr *)&send_addr, sizeof(send_addr)) < 0)
       error("Error in sendto");
 
@@ -352,21 +340,17 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
     udp_packet_t ack_packet;
     while (1) {
       errno = 0;
-      printf("[send_rel_single] Waiting for ack %d\n", packet->seq_num);
       if (recvfrom(fd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
           counter++;
           if (last && counter == 10) return;
-          printf("[send_rel_single] Timeout...\n");
           break;
         }
         error("Error in recvfrom");
       }
 
       double random_number = (double)rand() / RAND_MAX;
-      printf("[send_rel_single] random_number: %f\n", random_number);
       if (random_number < loss_prob) {
-        printf("[send_rel_single] Ack packet %d lost\n", ack_packet.ack_num);
         continue;
       }
       break;
@@ -376,7 +360,6 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
       continue;
     }
     if (ack_packet.ack_num == packet->seq_num) {
-      printf("[send_rel_single] Ack %d received\n", ack_packet.ack_num);
       break;
     }
   }
@@ -390,92 +373,128 @@ void send_rel_single(int fd, struct sockaddr_in send_addr, char *data, bool last
 
 
 void *send_rel_sender_thread(void *arg) {
-  // parsa arg
-  thread_data_t* thread_data;
-  thread_data = (thread_data_t *) arg;
-  int sockfd = thread_data->sockfd;
-  struct sockaddr_in server_addr = thread_data->addr;
-  FILE* file = thread_data->file;
-  uint32_t *base = thread_data->base;
-  pthread_mutex_t *lock = thread_data->lock;
-  pthread_cond_t *cond = thread_data->cond;
-  atomic_bool *end_thread = thread_data->end_thread;
-  struct timeval *timer_start = thread_data->timer_start;
-  const uint32_t num_packets = thread_data->num_packets;
+    // parse arg
+    thread_data_t* thread_data;
+    thread_data = (thread_data_t *) arg;
+    int sockfd = thread_data->sockfd;
+    struct sockaddr_in server_addr = thread_data->addr;
+    FILE* file = thread_data->file;
+    uint32_t *base = thread_data->base;
+    pthread_mutex_t *lock = thread_data->lock;
+    pthread_cond_t *cond = thread_data->cond;
+    atomic_bool *end_thread = thread_data->end_thread;
+    struct timeval *timer_start = thread_data->timer_start;
+    const uint32_t num_packets = thread_data->num_packets;
 
-  uint32_t next_seq_num = *base;
-  uint32_t next_seq_num_start = next_seq_num;
+    uint32_t next_seq_num = *base;
+    uint32_t next_seq_num_start = next_seq_num;
+    uint32_t ack_rtt = next_seq_num_start;
+    atomic_int *new_acks = thread_data->new_acks;
+    atomic_bool *duplicate_acks = thread_data->duplicate_acks;
+    long tid = pthread_self();
 
-  udp_packet_t** packets = (udp_packet_t**) malloc(num_packets * sizeof(udp_packet_t*));
-  memset(packets, 0, num_packets * sizeof(udp_packet_t*));
-  for (uint32_t i = 0; i < num_packets; i++) {
-    bytes_read_funct(NULL, file, &packets[i]);
-  }
-
-  while (!atomic_load(end_thread)) {
-    pthread_mutex_lock(lock);
-
-    while (next_seq_num < (*base) + WINDOW_SIZE) {
-      if (next_seq_num == num_packets + next_seq_num_start) {
-        break;
-      }
-
-      uint16_t data_size = packets[next_seq_num - next_seq_num_start]->data_size;
-      udp_packet_t* packet = (udp_packet_t*) malloc(offsetof(struct temp, data) + data_size);
-      if (packet == NULL) {
-          printf("Errore di allocazione della memoria per packet\n");
-          break;
-      }
-      size_t offset = next_seq_num - next_seq_num_start;
-      memcpy(packet, packets[offset], offsetof(udp_packet_t, data) + data_size);
-
-      printf("packet.data_size = %d\n", packet->data_size);
-      packet->seq_num = next_seq_num;
-      packet->checksum = calculate_checksum(packet);
-      thread_data->acked[next_seq_num % WINDOW_SIZE] = 0;
-
-      sendto(sockfd, packet, offsetof(struct temp, data) + packet->data_size, 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
-
-      printf("Sent packet with seq_num %d\n", packet->seq_num);
-
-      if (next_seq_num == *base) {
-        printf("Setting timeout\n");
-        gettimeofday(timer_start, NULL);
-      }
-      next_seq_num++;
-
-      free(packet);
+    udp_packet_t** packets = (udp_packet_t**) malloc(num_packets * sizeof(udp_packet_t*));
+    memset(packets, 0, num_packets * sizeof(udp_packet_t*));
+    for (uint32_t i = 0; i < num_packets; i++) {
+        bytes_read_funct(NULL, file, &packets[i]);
     }
 
-    pthread_cond_wait(cond, lock);
-    //if (difftime(time(NULL), *timer_start) > ((double) timeout_s + (double) timeout_us / 1000000)) {
-    struct timeval timer_now;
-    gettimeofday(&timer_now, NULL);
-    double diff_seconds = difftime(timer_now.tv_sec, timer_start->tv_sec);
-    double diff_microseconds = (timer_now.tv_usec - timer_start->tv_usec) / 1e6;
-    double diff = diff_seconds + diff_microseconds;
-    if (diff > ((double) timeout_s + (double) timeout_us / 1000000)) {
-      printf("\t\tTimeout\n");
-      memset(thread_data->acked, 0, WINDOW_SIZE * sizeof(bool));
-      next_seq_num = *base;
+    uint32_t cwnd = 1; // Congestion window starts from 1
+    uint32_t ssthresh = WINDOW_SIZE; // Set a high initial threshold
+    
+    while (!atomic_load(end_thread)) {
+        pthread_mutex_lock(lock);
+        
+        // Send packets within the current cwnd
+        while (next_seq_num < (*base) + cwnd && next_seq_num < num_packets + next_seq_num_start) {
+          if (*base == num_packets + next_seq_num_start + 1) {
+                break;
+            }
+
+            uint16_t data_size = packets[next_seq_num - next_seq_num_start]->data_size;
+            udp_packet_t* packet = (udp_packet_t*) malloc(offsetof(struct temp, data) + data_size);
+            if (packet == NULL) {
+                printf("[%lu] Errore di allocazione della memoria per packet\n", tid);
+                break;
+            }
+            size_t offset = next_seq_num - next_seq_num_start;
+            memcpy(packet, packets[offset], offsetof(udp_packet_t, data) + data_size);
+
+            packet->seq_num = next_seq_num;
+            packet->checksum = calculate_checksum(packet);
+            
+
+           
+            sendto(sockfd, packet, offsetof(struct temp, data) + packet->data_size, 0, (const struct sockaddr *)&server_addr, sizeof(server_addr));
+
+            if (next_seq_num == *base) {
+                gettimeofday(timer_start, NULL);
+            }
+            next_seq_num++;
+
+            free(packet);
+        }
+
+        if (*base == num_packets + next_seq_num_start + 1) {
+            pthread_mutex_unlock(lock);
+            break; // break if all packets have been sent
+        }
+
+        pthread_cond_wait(cond, lock);
+
+        // Handle timeout
+        struct timeval timer_now;
+        gettimeofday(&timer_now, NULL);
+        double diff_seconds = difftime(timer_now.tv_sec, timer_start->tv_sec);
+        double diff_microseconds = (timer_now.tv_usec - timer_start->tv_usec) / 1e6;
+        double diff = diff_seconds + diff_microseconds;
+        if (diff > ((double) timeout_s + (double) timeout_us / 1000000)) {
+            memset(thread_data->acked + *base, 0, (cwnd) * sizeof(bool));
+            next_seq_num = *base;
+            ssthresh = (cwnd / 2 > WINDOW_SIZE/2) ? (cwnd / 2) : WINDOW_SIZE/2;
+            cwnd = 1; // Reset cwnd on timeout
+            atomic_store(duplicate_acks, 0);
+            atomic_store(new_acks, 0);
+        }
+
+        // Process received ACKs and update base and cwnd
+        for (uint32_t i = (*base) - next_seq_num_start -1; i < num_packets; i++) {
+            if (thread_data->acked[i] && !atomic_load(duplicate_acks)) { 
+                // Slow start or congestion avoidance
+                if (cwnd < ssthresh) {
+                    cwnd += atomic_load(new_acks); // Exponential growth
+                    atomic_store(new_acks, 0);
+                    } else if ((thread_data->acked[i] && i == ack_rtt)) {
+                    ack_rtt = next_seq_num;
+                    cwnd++; // Linear growth
+                    atomic_store(new_acks, 0);
+                }
+                atomic_store(duplicate_acks, false); // Reset duplicate ACKs count
+            } else if (atomic_load(duplicate_acks)){ // Fast recovery
+                atomic_store(duplicate_acks, false);
+                atomic_store(new_acks, 0);
+                ssthresh = (cwnd / 2 > WINDOW_SIZE/2) ? (cwnd / 2) : WINDOW_SIZE/2;
+                cwnd = ssthresh + 3;
+                next_seq_num = *base;
+                break;
+            }
+        }
+        pthread_mutex_unlock(lock);
     }
-    pthread_mutex_unlock(lock);
-  }
 
-  // Dealloca la memoria
-  for (uint32_t i = 0; i < num_packets; i++) {
-      free(packets[i]);
-  }
-  free(packets);
+    // Deallocate memory
+    for (uint32_t i = 0; i < num_packets; i++) {
+        free(packets[i]);
+    }
+    free(packets);
 
-  printf("End sender thread\n");
-  pthread_exit(NULL);
+    pthread_exit(NULL);
 }
 
 
 
 void *send_rel_receiver_thread(void *arg) {
-  // parsa arg
+  // parse arg
   thread_data_t* thread_data;
   thread_data = (thread_data_t *) arg;
   int sockfd = thread_data->sockfd;
@@ -485,11 +504,13 @@ void *send_rel_receiver_thread(void *arg) {
   pthread_cond_t *cond = thread_data->cond;
   atomic_bool *end_thread = thread_data->end_thread;
   struct timeval *timer_start = thread_data->timer_start;
+  atomic_int *new_acks = thread_data->new_acks;
+  atomic_bool *duplicate_acks = thread_data->duplicate_acks;
 
   uint32_t seq_num_start = *base;
-
+  int dupl_a = 0;
+  
   set_timeout(sockfd, timeout_s, timeout_us);
-
   while (!atomic_load(end_thread)) {
     udp_packet_t ack_packet;
     if (recvfrom(sockfd, &ack_packet, sizeof(ack_packet), 0, NULL, NULL) < 0) {
@@ -502,32 +523,45 @@ void *send_rel_receiver_thread(void *arg) {
 
     double random_number = (double)rand() / RAND_MAX;
     if (random_number < loss_prob) {
-      printf("[send_rel_receiver_thread] Ack packet %d lost\n", ack_packet.ack_num);
       continue;
     }
 
     uint32_t ack_num = ack_packet.ack_num;
-    printf("[send_rel_receiver_thread] Received ack for packet with seq_num %d\n", ack_num);
-
+    
     if (ack_num == num_packets + seq_num_start - 1) {
       atomic_store(end_thread, true);
       break;
     }
     pthread_mutex_lock(lock);
-
     if (ack_num >= (*base)) {
-      for (uint32_t i = *base; i < ack_num; i++) {
-        thread_data->acked[i % WINDOW_SIZE] = 1;
+      dupl_a = 0;
+      int count = 0;
+      for (uint32_t i = *base; i <= ack_num && i < num_packets + seq_num_start; i++) {
+        int new_a = atomic_load(new_acks) + 1;
+        atomic_store(new_acks, new_a);
+        if (i == ack_num) {
+          thread_data->acked[ack_num - seq_num_start] = true;
+        }
+        count++;
       }
 
       gettimeofday(timer_start, NULL);
-
-      while (thread_data->acked[(*base) % WINDOW_SIZE]) {
-        (*base)++;
-      }
+      (*base) += count;
       pthread_cond_signal(cond);
+    } else {
+      if (thread_data->acked[ack_num - seq_num_start]) {
+        dupl_a += 1;
+        if (dupl_a >= 3) {
+          atomic_store(duplicate_acks, true);
+          pthread_mutex_unlock(lock);
+          pthread_cond_signal(cond);
+          dupl_a = 0;
+          continue;
+        }
+      } else {
+        thread_data->acked[ack_num - seq_num_start] = true;
+      }
     }
-
     pthread_mutex_unlock(lock);
   }
 
@@ -535,7 +569,6 @@ void *send_rel_receiver_thread(void *arg) {
 
   pthread_cond_signal(cond);
 
-  printf("End receiver thread\n");
   pthread_exit(NULL);
 }
 
@@ -560,22 +593,30 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
   end_thread = ATOMIC_VAR_INIT(false);
   atomic_store(&end_thread, false);
 
-  uint32_t base = seq_num_send;
-  bool acked[WINDOW_SIZE];
-  memset(acked, 0, sizeof(acked));
+  atomic_int new_acks;
+  new_acks = ATOMIC_VAR_INIT(0);
+  atomic_store(&new_acks, 0);
 
+  atomic_bool duplicate_acks;
+  duplicate_acks = ATOMIC_VAR_INIT(false);
+  atomic_store(&duplicate_acks, false);
+
+  uint32_t base = seq_num_send;
+  uint32_t num_pack = num_packets(size_file);
+  
   thread_data_t thread_data;
   thread_data.sockfd = fd;
   thread_data.addr = send_addr;
-  thread_data.num_packets = num_packets(size_file);
+  thread_data.num_packets = num_pack;
   thread_data.file = file;
   thread_data.base = &base;
   thread_data.lock = &lock;
   thread_data.cond = &cond;
   thread_data.end_thread = &end_thread;
-  thread_data.acked = malloc(WINDOW_SIZE * sizeof(bool));
+  thread_data.new_acks = &new_acks;
+  thread_data.acked = calloc(num_pack, sizeof(bool));
   thread_data.timer_start = &timer_start;
-
+  thread_data.duplicate_acks = &duplicate_acks;
   pthread_t sender, receiver;
   pthread_create(&sender, NULL, send_rel_sender_thread, &thread_data);
   pthread_create(&receiver, NULL, send_rel_receiver_thread, &thread_data);
@@ -596,7 +637,7 @@ void send_rel(int fd, struct sockaddr_in send_addr, FILE* file, size_t size_file
 int wait_for_input(int count, char* buff_in) {
   int buff_in_int;
 
-  while(1) { // scelta opzione da terminale
+  while(1) { // input choice from user
     __fpurge(stdin);
     
     fd_set readfds;
@@ -606,14 +647,14 @@ int wait_for_input(int count, char* buff_in) {
 
     int maxfd = (STDIN_FILENO > sockfd) ? STDIN_FILENO : sockfd;
 
-    // Attendere che uno dei file descriptor sia pronto per la lettura
+    // Wait for one of the file descriptors to be ready for reading
     int activity = select(maxfd + 1, &readfds, NULL, NULL, NULL);
 
     if (activity < 0 && errno != EINTR) {
       error("Error in select function");
     }
 
-    // Controllare se c'è input da stdin
+    // Check if there is input from stdin
     if (FD_ISSET(STDIN_FILENO, &readfds)) {
       buff_in[0] = getchar();
       buff_in[1] = '\0';
@@ -626,13 +667,11 @@ int wait_for_input(int count, char* buff_in) {
       break;
     }
 
-    // Controllare se c'è input dalla socket
+    // Check if there is input from the socket
     if (FD_ISSET(sockfd, &readfds)) {
       char buffer[MAX_SIZE_STRUCT] = {0};
       if (recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL) < 0) {
-        if (errno == EINTR || errno == EAGAIN /* timeout */) {
-          printf("[wait_for_input] errno: %d\n", errno);
-          fflush(stdout);
+        if (errno == EINTR || errno == EAGAIN) {
           continue;
         }
         error("Error in recvfrom");
@@ -642,17 +681,16 @@ int wait_for_input(int count, char* buff_in) {
       udp_packet_t *packet = malloc(offsetof(struct temp, data) + temp_packet->data_size);
 
       if (packet == NULL) {
-        error("malloc");
+        error("Malloc");
       }
 
-      // Copia i dati nel nuovo buffer allocato
+      // Copy data to the new allocated buffer
       memcpy(packet, buffer, offsetof(struct temp, data) + temp_packet->data_size);
 
       if (packet->checksum == calculate_checksum(packet) && packet->seq_num < seq_num_recv) {
         send_ack(sockfd, &servaddr, seq_num_recv-1);
       }
     }
-    /////////////////////////////////////////////////////
   }
   return buff_in_int;
 }
@@ -663,8 +701,16 @@ void list_option(socklen_t servaddr_len, int option, char **name) {
   
   char list_str[MAXLINE] = {0};
   recv_rel(sockfd, list_str, MAXLINE, false, &servaddr, &servaddr_len);
+  if (!strcmp(list_str, "No files available")) {
+      printf("%s\n", list_str);
+      if (option == 1) {
+        *name = malloc(sizeof(char));
+        (*name)[0] = '\0';
+      }
+      return;
+    }
 
-  // Salvo la lunghezza delle singole stringhe
+  // Save the length of individual strings
   size_t l = strlen(list_str);
   size_t cumulative_index[MAXVECT] = {0};
   int count = 1;
@@ -674,13 +720,13 @@ void list_option(socklen_t servaddr_len, int option, char **name) {
       count++;
     }
   }
-  // ora ho cumulative_index che ha gli indici di inizio di ogni stringa dentro list_str
+  // now I have cumulative_index which has the start indexes of each string inside list_str
   if (option == 0) {
     printf("Files available in the server: \n%s\n", list_str);
     fflush(stdout);
   } else {
     printf("Choose one of the following files:\n");
-    size_t c_index = 0; //cumulative_index[buff_in_int];
+    size_t c_index = 0;
     size_t c = 0;
     printf("\t%lu. ", c+1);
     while (list_str[c_index] != '\0') {
@@ -723,28 +769,33 @@ void get_option(socklen_t servaddr_len) {
   char* name;
   list_option(servaddr_len, 1, &name); // 1: get option
 
-  // Manda il nome del file desiderato al server
+  if (name[0] == '\0') {
+    return;
+  }
+
+  // send file name
   send_rel_single(sockfd, servaddr, name, false);
-  // Ricezione della grandezza del file dal server
+  // receive file dimension
   char size_rcv_str[11] = {0};
   
   int j = recv_rel(sockfd, size_rcv_str, sizeof(size_rcv_str), false, &servaddr, &servaddr_len);
   size_rcv_str[j] = '\0';
   uint32_t size_rcv = (uint32_t)strtol(size_rcv_str, NULL, 10);
   uint32_t size_next = ntohl(size_rcv);
-  printf("File size: %u\n", size_next);
- 
-  char recvline[size_next + 1];
+  
+  char *recvline = (char *)malloc(size_next + 1);
+  // receive file
   n = recv_rel(sockfd, recvline, size_next, true, &servaddr, &servaddr_len);
-  recvline[n] = '\0';        // aggiunge il carattere di terminazione
+  recvline[n] = '\0'; 
+  printf("Recvline size: %d\n", size_next);
   char *path = file_path(DEST_PATH, name);
 
-  FILE *file = fopen(path, "wb"); // Apertura del file in modalità binaria
+  FILE *file = fopen(path, "wb"); // Opening the file in binary write mode
   if (file == NULL) {
     error("Error in destination file opening");
   }
 
-  // Scrittura dei dati nel file
+  // Writing the received data in the file
   if (fwrite(recvline, 1, n, file) != (size_t) n) {
     error("Error in file writing");
   }
@@ -754,6 +805,7 @@ void get_option(socklen_t servaddr_len) {
   printf("File saved successfully in: %s\n\n", path);
   fflush(stdout);
 
+  free(recvline);
   free(name);
   free(path);
 }
@@ -762,11 +814,19 @@ void get_option(socklen_t servaddr_len) {
 
 void put_option() {
 
-  // selezione del file da mandare invio del nome al server
+  // file selection to save it to the server
 
   char list_command[MAXLINE];
   list_command[0] = '\0';
   ls(list_command);
+  if (strlen(list_command) == 0) {
+    printf("No files available");
+    fflush(stdout);
+    char *file_to_send = malloc(sizeof(char));
+    file_to_send[0] = '\0';
+    send_rel_single(sockfd, servaddr, file_to_send, false);
+    return;
+  }
 
   size_t l = strlen(list_command);
     size_t cumulative_index[MAXVECT] = {0};
@@ -779,7 +839,7 @@ void put_option() {
     }
 
   printf("Choose one of the following files:\n");
-  size_t c_index = 0; //cumulative_index[buff_in_int];
+  size_t c_index = 0;
   size_t c = 0;
   printf("\t%lu. ", c+1);
   while (list_command[c_index] != '\0') {
@@ -815,8 +875,8 @@ void put_option() {
   strncpy(file_to_send, list_command + index, i);
   file_to_send[i] = '\0';
   send_rel_single(sockfd, servaddr, file_to_send, false);
-
-  // invio dell'immagine al server
+  
+  // sending file
   printf("Sending file\n");
   fflush(stdout);
   char *FILENAME = file_path(DEST_PATH, file_to_send);
@@ -840,32 +900,22 @@ int main(int argc, char *argv[]) {
 
   check_args(argc, argv);
 
-  srand(time(NULL)); // inizializzazione seed numeri randomici
+  srand(time(NULL)); // random seed
 
   ////////// New connection //////////
 
   create_conn(server_ip, htons(SERV_PORT));
-  printf("Connection with main established\n");
-  fflush(stdout);
-  //char *new = '\0'
   char *new = "new";
-  printf("Sending request\n");
   send_rel_single(sockfd, servaddr, new, false);
-  printf("Request sent\n\n");
-  fflush(stdout);
 
-  // ricezione della nuova porta
+  // new port
   char new_port_str[6];
-  printf("Receiving new port\n");
   recv_rel(sockfd, new_port_str, sizeof(new_port_str), false, NULL, NULL);
-  printf("Connection with new port established\n\n");
-  fflush(stdout);
   
   ///////// Welcome message //////////
   
   char welcome[MAXLINE];
   socklen_t servaddr_len = sizeof(servaddr);
-  printf("Receiving welcome message\n");
   n = recv_rel(sockfd, welcome, MAXLINE, false, &servaddr, &servaddr_len);
   if (n < 9) {
     error("Invalid data received");
@@ -874,7 +924,7 @@ int main(int argc, char *argv[]) {
 
   ////////// Choice action ///////////
 
-  char choice_action[n-9+1]; // +1 per il terminatore null
+  char choice_action[n-9+1];
   strcpy(choice_action, welcome + 9);
   welcome[9] = '\0';
   printf("\n%s", welcome);
@@ -901,14 +951,10 @@ int main(int argc, char *argv[]) {
       break;
     } else error("Error in switch case / buff_in\n");
 
-    // ask user to press enter
-    // printf("Press enter to continue\n");
-    // __fpurge(stdin);
-    // getchar();
     printf("\n\n\n");
   }
 
-  close(sockfd); // Chiusura della socket
+  close(sockfd); 
 
   exit(0);
 
